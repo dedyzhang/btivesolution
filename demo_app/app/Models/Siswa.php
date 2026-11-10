@@ -1,0 +1,108 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Siswa extends Model
+{
+    use HasFactory, HasUuids;
+
+    protected $primaryKey = 'uuid';
+    protected $table = 'siswa';
+    protected $fillable = [
+        'id_login', 'nama', 'nis', 'nisn', 'id_kelas', 'jk',
+        'tempat_lahir', 'tanggal_lahir', 'agama', 'alamat', 'no_handphone',
+        'nama_ayah', 'pekerjaan_ayah', 'no_telp_ayah',
+        'nama_ibu', 'pekerjaan_ibu', 'no_telp_ibu',
+        'nama_wali', 'pekerjaan_wali', 'no_telp_wali',
+        'sekolah_asal', 'nama_ijazah', 'ortu_ijazah',
+        'tempat_lahir_ijazah', 'tanggal_lahir_ijazah',
+        'va', 'spp', 'foto',
+        'face_descriptor', 'face_descriptor_if', 'face_registered_at', 'face_photo',
+        'status', 'tahun_lulus', 'angkatan',
+    ];
+
+    protected $casts = [
+        'face_descriptor'    => 'array',
+        'face_descriptor_if' => 'array',
+        'face_registered_at' => 'datetime',
+    ];
+
+    public function getFacePhotoUrlAttribute(): ?string
+    {
+        return \App\Support\FaceMatch::photoUrl($this->face_photo, $this->uuid);
+    }
+
+    /** Descriptor wajah utk mesin pengenalan yg SEDANG AKTIF (Human.js/InsightFace) — pakai ini
+     *  drpd baca face_descriptor/face_descriptor_if langsung, supaya otomatis ikut Setting →
+     *  Mesin Pengenalan Wajah tanpa perlu diingat manual di tiap tempat baru. */
+    public function getActiveFaceDescriptorAttribute()
+    {
+        return $this->{\App\Support\FaceEngine::kolomDescriptor()};
+    }
+
+    public function scopeWhereFaceRegistered($query)
+    {
+        return $query->whereNotNull(\App\Support\FaceEngine::kolomDescriptor());
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'id_login', 'uuid');
+    }
+
+    public function kelas()
+    {
+        return $this->belongsTo(Kelas::class, 'id_kelas', 'uuid');
+    }
+
+    public function orangtua()
+    {
+        return $this->hasOne(Orangtua::class, 'id_siswa', 'uuid');
+    }
+
+    public function kartuPelajar()
+    {
+        return $this->hasOne(KartuPelajar::class, 'id_siswa', 'uuid');
+    }
+
+    public function rombels()
+    {
+        return $this->hasMany(Rombel::class, 'id_siswa', 'uuid');
+    }
+
+    public function sekretaris()
+    {
+        return $this->hasOne(Sekretaris::class, 'id_siswa', 'uuid');
+    }
+
+    /**
+     * uuid kelas yang diampu siswa ini sbg sekretaris, atau null. Pakai property access
+     * ($this->sekretaris, bukan sekretaris()) supaya Eloquent memo hasilnya di instance
+     * ini — dipanggil berkali-kali per request (guard beberapa controller + sidebar)
+     * tanpa query berulang, ganti pola lama yg query Sekretaris::where(...) mentah di
+     * tiap titik panggil.
+     */
+    public function sekretarisKelasId(): ?string
+    {
+        return $this->sekretaris?->id_kelas;
+    }
+
+    public function isSekretarisKelas(): bool
+    {
+        return $this->sekretaris !== null;
+    }
+
+    public function pembayaran()
+    {
+        return $this->hasMany(SppPembayaran::class, 'id_siswa', 'uuid');
+    }
+
+    public function kaihJawaban()
+    {
+        return $this->hasMany(KaihJawaban::class, 'id_siswa', 'uuid');
+    }
+}

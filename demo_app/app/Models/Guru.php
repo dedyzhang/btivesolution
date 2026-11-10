@@ -1,0 +1,84 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Guru extends Model
+{
+    use HasFactory, HasUuids;
+
+    protected $primaryKey = 'uuid';
+    protected $fillable = [
+        'id_login', 'nama', 'nik', 'nip', 'jk', 'tempat_lahir',
+        'tanggal_lahir', 'agama', 'alamat', 'tingkat_studi', 'program_studi',
+        'universitas', 'tahun_tamat', 'tmt_ngajar', 'tmt_smp', 'no_telp', 'foto', 'tanda_tangan',
+        'face_descriptor', 'face_descriptor_if', 'face_registered_at', 'face_photo', 'sekretaris_rapat',
+        'jam_pulang_wajib',
+    ];
+
+    protected $casts = [
+        'face_descriptor'    => 'array',
+        'face_descriptor_if' => 'array',
+        'face_registered_at' => 'datetime',
+        'sekretaris_rapat'   => 'boolean',
+    ];
+
+    public function getTandaTanganUrlAttribute(): ?string
+    {
+        if ($this->tanda_tangan && \Illuminate\Support\Facades\Storage::disk('public')->exists($this->tanda_tangan)) {
+            return asset('storage/' . $this->tanda_tangan);
+        }
+        return null;
+    }
+
+    public function getFacePhotoUrlAttribute(): ?string
+    {
+        return \App\Support\FaceMatch::photoUrl($this->face_photo, $this->uuid);
+    }
+
+    /** Descriptor wajah utk mesin pengenalan yg SEDANG AKTIF (Human.js/InsightFace) — pakai ini
+     *  drpd baca face_descriptor/face_descriptor_if langsung, supaya otomatis ikut Setting →
+     *  Mesin Pengenalan Wajah tanpa perlu diingat manual di tiap tempat baru. */
+    public function getActiveFaceDescriptorAttribute()
+    {
+        return $this->{\App\Support\FaceEngine::kolomDescriptor()};
+    }
+
+    public function scopeWhereFaceRegistered($query)
+    {
+        return $query->whereNotNull(\App\Support\FaceEngine::kolomDescriptor());
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'id_login', 'uuid');
+    }
+
+    public function walikelas()
+    {
+        return $this->hasOne(Walikelas::class, 'id_guru', 'uuid');
+    }
+
+    public function ngajars()
+    {
+        return $this->hasMany(Ngajar::class, 'id_guru', 'uuid');
+    }
+
+    public function perangkatUploads()
+    {
+        return $this->hasMany(PerangkatAjarGuru::class, 'id_guru', 'uuid');
+    }
+
+    public function rapatHadir()
+    {
+        return $this->belongsToMany(Rapat::class, 'rapat_hadir', 'id_guru', 'id_rapat', 'uuid', 'uuid')->withTimestamps();
+    }
+
+    public function getNamaLoginAttribute(): string
+    {
+        return $this->user?->username ?? '-';
+    }
+}

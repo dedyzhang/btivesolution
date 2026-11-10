@@ -1,0 +1,738 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Classroom;
+use App\Models\ClassroomMember;
+use App\Models\GameAnswer;
+use App\Models\GameAttempt;
+use App\Models\GameLiveParticipant;
+use App\Models\GameLiveSession;
+use App\Models\GameQuiz;
+use App\Models\GameQuizAssignment;
+use App\Models\User;
+use App\Notifications\ArenaLiveStartedNotification;
+use App\Policies\GameQuizPolicy;
+use App\Services\GameAnswerGrader;
+use App\Support\ArenaAccessToken;
+use App\Support\ArenaJoinQr;
+use App\Support\ArenaSoloShuffle;
+use App\Support\Audit;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controllers\HasMiddleware;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+
+class GameLiveController extends Controller implements HasMiddleware
+{
+    /** Jeda otomatis (detik) sebelum sesi maju sendiri dari fase pembahasan/papan peringkat. */
+    private const REVEAL_SECONDS = 4;
+    private const STANDINGS_SECONDS = 6;
+
+    /** Siswa dianggap online jika last_seen dalam window ini (poll live ~3 detik). */
+    private const ONLINE_SECONDS = 12;
+
+    private const ACTIVE_STATUSES = ['lobby', 'question', 'reveal', 'standings'];
+
+    public static function middleware(): array
+    {
+        return [
+            new \Illuminate\Routing\Controllers\Middleware(function ($request, $next) {
+                if ($request->user() && $request->user()->access === 'orangtua') {
+                    abort(403, 'Akses ditolak.');
+                }
+
+                return $next($request);
+            }),
+        ];
+    }
+
+    public function show(Request $request, Classroom $classroom, GameQuiz $quiz)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('view', $quiz);
+        abort_unless($quiz->isPublished(), 403, 'Kuis belum diterbitkan.');
+
+        $session = $quiz->activeLiveSession($classroom);
+        $canHost = auth()->user()->can('manage', $quiz);
+        $quiz->load(['questions' => fn ($q) => $q->orderBy('sort_order')]);
+
+        $liveJoinUrl = ArenaJoinQr::liveJoinUrl($classroom, $quiz);
+        $liveJoinQrSvg = ($canHost && $quiz->allowsLive() && $quiz->access_token)
+            ? ArenaJoinQr::svg($liveJoinUrl, 200)
+            : null;
+        $liveBarcodePayload = ($canHost && $quiz->allowsLive() && $quiz->access_token)
+            ? ArenaJoinQr::liveBarcodePayload($quiz)
+            : null;
+
+        $requiresJoinToken = ArenaAccessToken::requiresToken($quiz);
+        $hasJoinUnlock = ArenaAccessToken::hasUnlock($quiz);
+        $prefillLiveToken = request('join') === 'live'
+            ? strtoupper(substr((string) request('t', ''), 0, 8))
+            : '';
+
+        if ($message = ArenaAccessToken::validateAndGrant($request, $quiz)) {
+            return redirect()->route('classroom.arena.live', [$classroom, $quiz])
+                ->with('error', $message);
+        }
+
+        $hasJoinUnlock = ArenaAccessToken::hasUnlock($quiz);
+
+        return view('arena-belajar.live', compact(
+            'classroom',
+            'quiz',
+            'session',
+            'canHost',
+            'liveJoinUrl',
+            'liveJoinQrSvg',
+            'liveBarcodePayload',
+            'requiresJoinToken',
+            'hasJoinUnlock',
+            'prefillLiveToken',
+        ));
+    }
+
+    public function start(Request $request, Classroom $classroom, GameQuiz $quiz, \App\Services\FirebaseRtdbService $firebase)
+    {
+        abort_if(\App\Support\ModeUjian::aktif(), 403, 'Arena Belajar Live dinonaktifkan sementara selama Mode Ujian aktif demi stabilitas server.');
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('manage', $quiz);
+        abort_unless($quiz->isPublished() && $quiz->questions()->exists(), 422, 'Kuis harus terbit dan punya soal.');
+        abort_unless($quiz->allowsLive(), 422, 'Kuis ini disetel "Solo saja" — mode live tidak tersedia.');
+
+        $session = DB::transaction(function () use ($quiz, $classroom, $request) {
+            GameLiveSession::where('quiz_id', $quiz->uuid)
+                ->where('classroom_id', $classroom->uuid)
+                ->whereIn('status', self::ACTIVE_STATUSES)
+                ->lockForUpdate()
+                ->get()
+                ->each(fn (GameLiveSession $s) => $s->update(['status' => 'ended', 'ended_at' => now()]));
+
+            GameQuizAssignment::firstOrCreate(
+                ['quiz_id' => $quiz->uuid, 'classroom_id' => $classroom->uuid],
+                ['status' => 'open', 'opens_at' => $quiz->opens_at, 'due_at' => $quiz->due_at]
+            );
+
+            $quiz->update(['mode' => 'live']);
+
+            return GameLiveSession::create([
+                'quiz_id'        => $quiz->uuid,
+                'classroom_id'   => $classroom->uuid,
+                'hosted_by'      => $request->user()->uuid,
+                'status'         => 'lobby',
+                'started_at'     => now(),
+                'question_index' => 0,
+            ]);
+        });
+
+        $firebase->pingArena($session->uuid);
+        $firebase->pingArenaQuiz($quiz->uuid);
+
+        Audit::log('arena_live_start', $quiz, ['session' => $session->uuid]);
+
+        try {
+            $memberIds = ClassroomMember::where('classroom_id', $classroom->uuid)
+                ->where('role_in_class', 'siswa')
+                ->pluck('user_id');
+            User::whereIn('uuid', $memberIds)->get()
+                ->each(fn (User $u) => $u->notify(new ArenaLiveStartedNotification($quiz, $classroom)));
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        return redirect()->route('classroom.arena.live', [$classroom, $quiz])
+            ->with('success', 'Sesi live dimulai. Siswa bisa bergabung.');
+    }
+
+    public function advance(Classroom $classroom, GameQuiz $quiz, GameAnswerGrader $grader, \App\Services\FirebaseRtdbService $firebase)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('manage', $quiz);
+
+        $questions = $quiz->questions()->orderBy('sort_order')->get();
+        abort_unless($questions->isNotEmpty(), 422);
+
+        $session = DB::transaction(function () use ($quiz, $classroom, $questions, $grader) {
+            $session = GameLiveSession::where('quiz_id', $quiz->uuid)
+                ->where('classroom_id', $classroom->uuid)
+                ->whereIn('status', self::ACTIVE_STATUSES)
+                ->lockForUpdate()
+                ->latest()
+                ->first();
+            abort_unless($session, 404, 'Tidak ada sesi live aktif.');
+
+            return $this->transitionState($session, $questions, $quiz, $classroom, $grader);
+        });
+
+        Audit::log('arena_live_advance', $quiz, [
+            'session' => $session->uuid,
+            'status' => $session->status,
+            'phase' => $session->phase,
+            'seq' => $session->current_question_seq,
+        ]);
+        
+        $firebase->pingArena($session->uuid);
+
+        if (request()->expectsJson()) {
+            return response()->json(['ok' => true]);
+        }
+        return back();
+    }
+
+    public function end(Classroom $classroom, GameQuiz $quiz, GameAnswerGrader $grader, \App\Services\FirebaseRtdbService $firebase)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('manage', $quiz);
+
+        $session = GameLiveSession::where('quiz_id', $quiz->uuid)
+            ->where('classroom_id', $classroom->uuid)
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->latest()
+            ->first();
+
+        if ($session) {
+            $session->update(['status' => 'ended', 'ended_at' => now()]);
+            $this->finalizeLiveAttempts($quiz, $classroom, $grader);
+            Audit::log('arena_live_end', $quiz, ['session' => $session->uuid]);
+            $firebase->pingArena($session->uuid);
+        }
+
+        return redirect()->route('classroom.arena.results', [$classroom, $quiz])
+            ->with('success', 'Sesi live diakhiri.');
+    }
+
+    public function state(Classroom $classroom, GameQuiz $quiz, GameAnswerGrader $grader)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        abort_unless(app(GameQuizPolicy::class)->view(auth()->user(), $quiz)
+            || app(GameQuizPolicy::class)->play(auth()->user(), $quiz, $classroom), 403);
+
+        if ($denied = $this->denyLiveWithoutToken($quiz)) {
+            return $denied;
+        }
+
+        $session = GameLiveSession::where('quiz_id', $quiz->uuid)
+            ->where('classroom_id', $classroom->uuid)
+            ->latest()
+            ->first();
+
+        if ($session && $session->isActive()) {
+            // Siswa yg buka halaman ini (dan terus polling) dianggap "masuk" ke sesi — dipakai
+            // sbg penyebut auto-advance "semua yg hadir sudah jawab". joined_at TIDAK direset
+            // tiap poll, cuma last_seen_at.
+            if (auth()->user()->access === 'siswa') {
+                $participant = GameLiveParticipant::firstOrNew(['session_id' => $session->uuid, 'user_id' => auth()->user()->uuid]);
+                if (!$participant->exists) {
+                    $participant->joined_at = now();
+                }
+                $participant->last_seen_at = now();
+                $participant->save();
+            }
+
+            $session = $this->autoAdvanceIfNeeded($session, $quiz, $classroom, $grader);
+        }
+
+        return response()->json([
+            'ok'      => true,
+            'session' => $session ? $this->sessionPayload($session, $quiz, auth()->user()) : null,
+        ]);
+    }
+
+    public function leaderboard(Classroom $classroom, GameQuiz $quiz)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('view', $quiz);
+
+        if ($denied = $this->denyLiveWithoutToken($quiz)) {
+            return $denied;
+        }
+
+        $canManage = auth()->user()->can('manage', $quiz);
+        $hideScores = $quiz->hide_scores && !$canManage;
+
+        $assignment = $quiz->assignmentFor($classroom);
+        $rows = collect();
+        $me = null;
+
+        if ($assignment) {
+            // Urutan SELALU dihitung sama (ORDER BY di query, bukan sortByDesc kondisional) —
+            // dulu saat hide_scores aktif, urutan siswa sama sekali tak di-sort (skip sortByDesc),
+            // beda dgn urutan guru yg tetap ter-sort — itu sebab podium guru vs siswa berbeda.
+            // Tiebreak ganda (updated_at lalu uuid) bikin urutan STABIL antar-poll/antar-soal
+            // walau skor seri — sebelumnya tanpa ORDER BY sama sekali, urutan seri bisa
+            // berubah-ubah tiap request (tak dijamin stabil oleh DB engine).
+            // total_score/correct_count SELALU disinkronkan di answer() setiap kali siswa
+            // menjawab — jadi tak perlu eager-load 'answers' & hitung ulang di sini.
+            $rows = $assignment->attempts()
+                ->with(['student:uuid,username', 'student.guru:uuid,id_login,nama', 'student.siswa:uuid,id_login,nama'])
+                ->where('source', GameAttempt::SOURCE_LIVE)
+                ->whereIn('status', ['in_progress', 'submitted', 'graded'])
+                ->orderByDesc('total_score')
+                ->orderBy('updated_at')
+                ->orderBy('uuid')
+                ->get()
+                ->map(function (GameAttempt $a) use ($hideScores) {
+                    $row = [
+                        'student_id' => $a->student_id,
+                        'name'       => $a->student?->displayName() ?? 'Siswa',
+                    ];
+                    if (!$hideScores) {
+                        $row['score'] = (int) $a->total_score;
+                        $row['correct'] = (int) $a->correct_count;
+                    }
+
+                    return $row;
+                })
+                ->values()
+                ->take(20)
+                ->values();
+
+            $me = $rows->firstWhere('student_id', auth()->user()->uuid);
+        }
+
+        return response()->json([
+            'ok'            => true,
+            'leaderboard'   => $rows,
+            'me'            => $me,
+            'scoring_mode'  => $quiz->scoring_mode,
+            'scores_hidden' => $hideScores,
+        ]);
+    }
+
+    public function answer(Request $request, Classroom $classroom, GameQuiz $quiz, GameAnswerGrader $grader, \App\Services\FirebaseRtdbService $firebase)
+    {
+        abort_unless($quiz->classroom_id === $classroom->uuid, 404);
+        $this->authorize('play', [$quiz, $classroom]);
+
+        if ($denied = $this->denyLiveWithoutToken($quiz)) {
+            return $denied;
+        }
+
+        $data = $request->validate([
+            'question_id'        => ['required', 'uuid'],
+            'selected_option_id' => ['nullable', 'uuid'],
+            'answer_text'        => ['nullable', 'string', 'max:10000'],
+        ]);
+
+        $result = DB::transaction(function () use ($request, $classroom, $quiz, $grader, $data) {
+            $session = GameLiveSession::where('quiz_id', $quiz->uuid)
+                ->where('classroom_id', $classroom->uuid)
+                ->whereIn('status', self::ACTIVE_STATUSES)
+                ->lockForUpdate()
+                ->latest()
+                ->first();
+            abort_unless($session, 404, 'Tidak ada sesi live aktif.');
+            abort_unless($session->status === 'question', 422, 'Belum ada soal aktif.');
+            abort_unless($data['question_id'] === $session->current_question_id, 422, 'Soal tidak aktif.');
+
+            $question = $quiz->questions()->with('options')->where('uuid', $data['question_id'])->firstOrFail();
+
+            if (!empty($data['selected_option_id'])) {
+                abort_unless(
+                    $question->options->contains('uuid', $data['selected_option_id']),
+                    422,
+                    'Opsi tidak valid.'
+                );
+            }
+
+            $assignment = GameQuizAssignment::firstOrCreate(
+                ['quiz_id' => $quiz->uuid, 'classroom_id' => $classroom->uuid],
+                ['status' => 'open', 'opens_at' => $quiz->opens_at, 'due_at' => $quiz->due_at]
+            );
+
+            $attempt = GameAttempt::firstOrCreate(
+                [
+                    'assignment_id' => $assignment->uuid,
+                    'student_id'    => $request->user()->uuid,
+                    'source'        => GameAttempt::SOURCE_LIVE,
+                ],
+                ['status' => 'in_progress', 'started_at' => now()]
+            );
+            abort_unless(!$attempt->isSubmitted(), 403, 'Attempt sudah dikunci.');
+
+            $existing = GameAnswer::where('attempt_id', $attempt->uuid)
+                ->where('question_id', $question->uuid)
+                ->lockForUpdate()
+                ->first();
+            if ($existing && $existing->answered_at) {
+                return [null, false, false, true]; // already locked
+            }
+
+            $elapsed = $session->question_started_at
+                ? (int) abs(now()->diffInMilliseconds($session->question_started_at))
+                : 0;
+
+            $answer = GameAnswer::updateOrCreate(
+                ['attempt_id' => $attempt->uuid, 'question_id' => $question->uuid],
+                [
+                    'selected_option_id' => $data['selected_option_id'] ?? null,
+                    'answer_text'        => $data['answer_text'] ?? null,
+                    'answered_at'        => now(),
+                ]
+            );
+
+            $graded = $grader->gradeAndPersistAnswer($answer->fresh(), $question, $quiz, $elapsed);
+
+            $attempt->load('answers');
+            $sum = (int) $attempt->answers->sum('points_awarded');
+            $correct = (int) $attempt->answers->where('is_correct', true)->count();
+            $totalPts = max(1, (int) $quiz->questions()->sum('points'));
+            $maxRaw = $quiz->scoring_mode === 'competitive' ? (int) ceil($totalPts * 1.2) : $totalPts;
+            $scaled = (int) round(($sum / $maxRaw) * $quiz->max_score);
+            $attempt->update([
+                'total_score'   => max(0, min($quiz->max_score, $scaled)),
+                'correct_count' => $correct,
+            ]);
+
+            return [$graded, $quiz->instant_feedback, $quiz->hide_scores && !auth()->user()->can('manage', $quiz), false];
+        }, 3);
+
+        [$graded, $instantFeedback, $hideScores, $alreadyLocked] = $result;
+
+        if ($alreadyLocked) {
+            return response()->json(['ok' => false, 'message' => 'Jawaban untuk soal ini sudah dikunci.'], 409);
+        }
+
+        // Semua yg hadir sudah jawab? Langsung maju (bukan tunggu poll 3 detik berikutnya).
+        $session = GameLiveSession::where('quiz_id', $quiz->uuid)
+            ->where('classroom_id', $classroom->uuid)
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->latest()
+            ->first();
+        if ($session) {
+            $this->autoAdvanceIfNeeded($session, $quiz, $classroom, $grader);
+            $firebase->pingArena($session->uuid);
+        }
+
+        $payload = ['ok' => true];
+        if ($instantFeedback && !$hideScores) {
+            $payload['is_correct'] = $graded['is_correct'];
+            $payload['points'] = $graded['points'];
+        } else {
+            $payload['saved'] = true;
+        }
+
+        return response()->json($payload);
+    }
+
+    /**
+     * Satu langkah maju di state machine: lobby -> question -> reveal -> standings ->
+     * (question berikutnya ATAU ended). Dipakai baik oleh klik manual host (advance())
+     * maupun auto-advance (autoAdvanceIfNeeded()) — supaya keduanya konsisten persis.
+     */
+    private function transitionState(
+        GameLiveSession $session,
+        Collection $questions,
+        GameQuiz $quiz,
+        Classroom $classroom,
+        GameAnswerGrader $grader
+    ): GameLiveSession {
+        if ($session->status === 'lobby') {
+            $q = $questions->first();
+            $session->update([
+                'status'               => 'question',
+                'current_question_id' => $q->uuid,
+                'question_index'      => 0,
+                'question_started_at' => now(),
+                'question_deadline_at' => $q->time_limit_seconds ? now()->addSeconds($q->time_limit_seconds) : null,
+                'phase_started_at'     => now(),
+            ]);
+
+            return $session->fresh();
+        }
+
+        if ($session->status === 'question') {
+            $session->update(['status' => 'reveal', 'phase_started_at' => now()]);
+
+            return $session->fresh();
+        }
+
+        if ($session->status === 'reveal') {
+            $session->update(['status' => 'standings', 'phase_started_at' => now()]);
+
+            return $session->fresh();
+        }
+
+        if ($session->status === 'standings') {
+            $next = $session->question_index + 1;
+            if ($next >= $questions->count()) {
+                $session->update([
+                    'status'               => 'ended',
+                    'ended_at'             => now(),
+                    'current_question_id' => null,
+                    'question_deadline_at' => null,
+                    'phase_started_at'     => null,
+                ]);
+                $this->finalizeLiveAttempts($quiz, $classroom, $grader);
+
+                return $session->fresh();
+            }
+            $q = $questions[$next];
+            $session->update([
+                'status'               => 'question',
+                'current_question_id' => $q->uuid,
+                'question_index'      => $next,
+                'question_started_at' => now(),
+                'question_deadline_at' => $q->time_limit_seconds ? now()->addSeconds($q->time_limit_seconds) : null,
+                'phase_started_at'     => now(),
+            ]);
+
+            return $session->fresh();
+        }
+
+        return $session;
+    }
+
+    /**
+     * Cek & jalankan auto-advance kalau syaratnya terpenuhi:
+     * - fase 'question': waktu soal habis, ATAU semua peserta yg tercatat hadir sudah jawab soal ini.
+     * - fase 'reveal'/'standings': sudah lewat jeda otomatis (REVEAL_SECONDS/STANDINGS_SECONDS).
+     * Host tetap bisa maju manual kapan saja lewat advance() — ini murni percepatan tambahan.
+     *
+     * Endpoint ini dipanggil oleh SETIAP peserta di SETIAP poll (~4 detik) — kalau kelas isi
+     * 30 siswa, itu 30 pemanggilan/siklus. Dulu semuanya langsung buka DB::transaction()
+     * + lockForUpdate() pada SATU baris game_live_sessions, walau 99% siklus kondisinya
+     * belum terpenuhi (blm waktunya) — bikin poll saling antre kunci baris yg sama, makin
+     * berat makin banyak siswa. Sekarang: cek dulu TANPA lock (mightNeedAdvance) — cuma
+     * masuk transaksi+lock kalau pre-check ini bilang "kemungkinan sudah waktunya".
+     */
+    private function autoAdvanceIfNeeded(
+        GameLiveSession $session,
+        GameQuiz $quiz,
+        Classroom $classroom,
+        GameAnswerGrader $grader
+    ): GameLiveSession {
+        if (!$session->isActive()) {
+            return $session;
+        }
+
+        if (!$this->mightNeedAdvance($session, $quiz)) {
+            return $session;
+        }
+
+        $questions = $quiz->questions()->orderBy('sort_order')->get();
+        if ($questions->isEmpty()) {
+            return $session;
+        }
+
+        return DB::transaction(function () use ($session, $quiz, $classroom, $questions, $grader) {
+            $locked = GameLiveSession::where('uuid', $session->uuid)->lockForUpdate()->first();
+            if (!$locked || !$locked->isActive()) {
+                return $locked ?? $session;
+            }
+
+            // Re-cek DI DALAM lock (bukan cuma percaya pre-check di luar) — kondisi bisa
+            // berubah antara pre-check dan sini (dua poll nyaris bersamaan), dan cuma yg
+            // pertama dapat lock yg boleh benar-benar transisi.
+            if (!$this->mightNeedAdvance($locked, $quiz)) {
+                return $locked;
+            }
+
+            return $this->transitionState($locked, $questions, $quiz, $classroom, $grader);
+        }, 3);
+    }
+
+    /** Cek murah TANPA lock: apakah sesi ini kemungkinan perlu diperiksa utk auto-advance? */
+    private function mightNeedAdvance(GameLiveSession $session, GameQuiz $quiz): bool
+    {
+        return match ($session->status) {
+            'question' => ($session->question_deadline_at && now()->greaterThanOrEqualTo($session->question_deadline_at))
+                || $this->allJoinedHaveAnswered($session, $quiz),
+            'reveal' => $session->phase_started_at
+                && now()->greaterThanOrEqualTo($session->phase_started_at->copy()->addSeconds(self::REVEAL_SECONDS)),
+            'standings' => $session->phase_started_at
+                && now()->greaterThanOrEqualTo($session->phase_started_at->copy()->addSeconds(self::STANDINGS_SECONDS)),
+            default => false,
+        };
+    }
+
+    /** Semua siswa yg tercatat "masuk" sesi ini sudah kirim jawaban utk soal yg sedang aktif? */
+    private function allJoinedHaveAnswered(GameLiveSession $session, GameQuiz $quiz): bool
+    {
+        $joinedCount = GameLiveParticipant::where('session_id', $session->uuid)->count();
+        if ($joinedCount === 0) {
+            return false;
+        }
+
+        $assignment = $quiz->assignmentFor($session->classroom);
+        if (!$assignment) {
+            return false;
+        }
+
+        return $this->answeredCountFor($assignment, $session->current_question_id) >= $joinedCount;
+    }
+
+    /** Berapa attempt live (utk assignment ini) yg sudah jawab soal $questionId — SATU query (whereHas). */
+    private function answeredCountFor(GameQuizAssignment $assignment, ?string $questionId): int
+    {
+        if (!$questionId) {
+            return 0;
+        }
+
+        return GameAnswer::where('question_id', $questionId)
+            ->whereHas('attempt', fn ($q) => $q->where('assignment_id', $assignment->uuid)
+                ->where('source', GameAttempt::SOURCE_LIVE))
+            ->count();
+    }
+
+    private function finalizeLiveAttempts(GameQuiz $quiz, Classroom $classroom, GameAnswerGrader $grader): void
+    {
+        $assignment = $quiz->assignmentFor($classroom);
+        if (!$assignment) {
+            return;
+        }
+
+        $assignment->attempts()
+            ->where('source', GameAttempt::SOURCE_LIVE)
+            ->where('status', 'in_progress')
+            ->get()
+            ->each(function (GameAttempt $attempt) use ($grader, $quiz) {
+                $result = $grader->gradeAttempt($attempt->fresh('answers'), $quiz);
+                $attempt->update([
+                    'total_score'   => $result['total_score'],
+                    'correct_count' => $result['correct_count'],
+                    'status'        => 'submitted',
+                    'submitted_at'  => now(),
+                ]);
+            });
+
+        if ($quiz->mode === 'live') {
+            $quiz->update(['mode' => 'async']);
+        }
+    }
+
+    private function sessionPayload(GameLiveSession $session, GameQuiz $quiz, ?User $user = null): array
+    {
+        // Dulu: load SEMUA soal+opsi tiap poll (tiap ~4 detik, per siswa) cuma utk pakai SATU
+        // baris (soal aktif) — utk kuis 20 soal x 4 opsi itu ~100 baris dihidrasi sia-sia per
+        // poll. Sekarang: soal aktif saja (query terarah), total soal cukup COUNT (tanpa hidrasi).
+        $questionTotal = $quiz->questions()->count();
+        $current = $session->current_question_id
+            ? $quiz->questions()->with('options')->where('uuid', $session->current_question_id)->first()
+            : null;
+
+        $questionPayload = null;
+        if ($current && in_array($session->status, ['question', 'reveal'], true)) {
+            $questionPayload = [
+                'uuid'          => $current->uuid,
+                'type'          => $current->type,
+                'question_text' => $current->question_text,
+                'points'        => $current->points,
+                'meta'          => $this->publicMeta($current, $session),
+                'options'       => $current->options->map(fn ($o) => [
+                    'uuid'        => $o->uuid,
+                    'option_text' => $o->option_text,
+                    'is_correct'  => $session->status === 'reveal' ? (bool) $o->is_correct : null,
+                ])->values(),
+                'explanation'   => $session->status === 'reveal' ? $current->explanation : null,
+                'correct_meta'  => $session->status === 'reveal' ? ($current->meta ?? null) : null,
+            ];
+        }
+
+        $phaseEndsAt = null;
+        if ($session->status === 'question' && $session->question_deadline_at) {
+            $phaseEndsAt = $session->question_deadline_at;
+        } elseif ($session->status === 'reveal' && $session->phase_started_at) {
+            $phaseEndsAt = $session->phase_started_at->copy()->addSeconds(self::REVEAL_SECONDS);
+        } elseif ($session->status === 'standings' && $session->phase_started_at) {
+            $phaseEndsAt = $session->phase_started_at->copy()->addSeconds(self::STANDINGS_SECONDS);
+        }
+
+        $joinedCount = null;
+        $answeredCount = null;
+        if ($session->status === 'question') {
+            $joinedCount = GameLiveParticipant::where('session_id', $session->uuid)->count();
+            $assignment = $quiz->assignmentFor($session->classroom);
+            $answeredCount = $assignment
+                ? $this->answeredCountFor($assignment, $session->current_question_id)
+                : 0;
+        }
+
+        $onlineCutoff = now()->subSeconds(self::ONLINE_SECONDS);
+        $participants = $session->isActive()
+            ? GameLiveParticipant::where('session_id', $session->uuid)
+                ->with([
+                    'user:uuid,username,access',
+                    'user.guru:uuid,id_login,nama',
+                    'user.siswa:uuid,id_login,nama',
+                ])
+                ->orderBy('joined_at')
+                ->get()
+                ->map(function (GameLiveParticipant $p) use ($onlineCutoff) {
+                    $online = $p->last_seen_at && $p->last_seen_at->gte($onlineCutoff);
+
+                    return [
+                        'user_id' => $p->user_id,
+                        'name' => $p->user?->displayName() ?? 'Siswa',
+                        'online' => $online,
+                        'joined_at' => optional($p->joined_at)?->toIso8601String(),
+                    ];
+                })
+                ->values()
+                ->all()
+            : [];
+
+        $onlineCount = collect($participants)->where('online', true)->count();
+
+        return [
+            'uuid'                 => $session->uuid,
+            'status'               => $session->status,
+            'status_label'         => $session->statusLabel(),
+            'question_index'       => $session->question_index,
+            'question_total'       => $questionTotal,
+            'current_question_id' => $session->current_question_id,
+            'question'             => $questionPayload,
+            'question_started_at' => optional($session->question_started_at)?->toIso8601String(),
+            'question_deadline_at' => optional($session->question_deadline_at)?->toIso8601String(),
+            'phase_ends_at'        => optional($phaseEndsAt)?->toIso8601String(),
+            'joined_count'         => $joinedCount,
+            'answered_count'       => $answeredCount,
+            'participants'         => $participants,
+            'online_count'         => $onlineCount,
+            'can_answer'           => $session->status === 'question' && $user && $user->access === 'siswa',
+        ];
+    }
+
+    private function publicMeta($question, GameLiveSession $session): ?array
+    {
+        if ($question->type === 'match') {
+            $pairs = $question->meta['pairs'] ?? [];
+            $lefts = collect($pairs)->pluck('left')->values();
+            // Dulu shuffle() polos — diacak ULANG tiap kali sessionPayload() dipanggil, yaitu
+            // tiap poll (~4 detik) SELAMA soal ini aktif, utk SETIAP siswa. Akibatnya posisi
+            // opsi di dropdown berubah-ubah persis saat siswa lagi menjawab. Sekarang pakai
+            // shuffle deterministik (pola sama App\Support\ArenaSoloShuffle di mode solo) —
+            // di-seed dari sesi+soal, jadi urutan SAMA selama soal ini aktif, apa pun berapa
+            // kali/siapa yg poll.
+            $rights = ArenaSoloShuffle::shuffle(
+                collect($pairs)->pluck('right')->values(),
+                'live|'.$session->uuid.'|match|'.$question->uuid
+            );
+
+            return [
+                'lefts'  => $lefts,
+                'rights' => $rights,
+            ];
+        }
+
+        return null;
+    }
+
+    /** Siswa tanpa unlock token tidak boleh polling/jawab live. */
+    private function denyLiveWithoutToken(GameQuiz $quiz)
+    {
+        $user = auth()->user();
+        if (! $user || $user->access !== 'siswa') {
+            return null;
+        }
+        if (! ArenaAccessToken::requiresToken($quiz) || ArenaAccessToken::hasUnlock($quiz)) {
+            return null;
+        }
+
+        return response()->json([
+            'ok' => false,
+            'message' => 'Token arena belum divalidasi.',
+            'requires_token' => true,
+        ], 403);
+    }
+}

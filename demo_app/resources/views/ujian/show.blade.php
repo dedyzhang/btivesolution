@@ -1,0 +1,324 @@
+@extends('layouts.app')
+@section('title', $ujian->judul)
+
+@section('content')
+<div class="max-w-3xl mx-auto space-y-5">
+    <div>
+        <nav class="text-xs text-slate-400 mb-1"><a href="{{ $ujian->id_ujian_paket ? route('ujian.index', ['paket' => $ujian->id_ujian_paket]) : route('ujian.index') }}" class="hover:underline">Ujian{{ $ujian->paket ? ' (' . $ujian->paket->nama . ')' : '' }}</a> / {{ $ujian->judul }}</nav>
+        <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="page-title">{{ $ujian->judul }}</h1>
+            <span class="badge bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">{{ $ujian->jenisLabel() }}</span>
+            @php
+                $statusBadge = match($ujian->status) {
+                    'published' => 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300',
+                    'closed' => 'bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300',
+                    default => 'bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300',
+                };
+            @endphp
+            <span class="badge {{ $statusBadge }}">{{ $ujian->statusLabel() }}</span>
+        </div>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ $ujian->pelajaran?->nama }} · Target nilai: {{ strtoupper($ujian->target_nilai) }} · {{ $ujian->durasi_menit }} menit</p>
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+        <a href="{{ route('ujian.edit', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="list-checks" class="w-4 h-4 inline"></i> Susun Soal ({{ $ujian->soal->count() }})
+        </a>
+        <a href="{{ route('ujian.pretest.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-400 dark:hover:bg-purple-900/30 flex items-center gap-1.5">
+            <i data-lucide="qr-code" class="w-4 h-4 inline"></i> Pre-Test Publik
+        </a>
+        <div x-data="{ openEkspor: false }" class="relative inline-block">
+            <button type="button" @click="openEkspor = !openEkspor" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center gap-1.5">
+                <i data-lucide="download" class="w-4 h-4"></i> Ekspor Soal
+                <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400"></i>
+            </button>
+            <div x-show="openEkspor" @click.outside="openEkspor = false" x-cloak class="absolute left-0 mt-1 w-48 rounded-xl bg-white dark:bg-slate-800 shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 z-20">
+                <a href="{{ route('ujian.soal.export', ['ujian' => $ujian, 'format' => 'xlsx']) }}" class="flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700">
+                    <i data-lucide="file-spreadsheet" class="w-4 h-4 text-emerald-600"></i> Unduh Excel (.xlsx)
+                </a>
+                <a href="{{ route('ujian.soal.export', ['ujian' => $ujian, 'format' => 'json']) }}" class="flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700">
+                    <i data-lucide="code" class="w-4 h-4 text-blue-600"></i> Unduh JSON (.json)
+                </a>
+            </div>
+        </div>
+        <a href="{{ route('ujian.pengaturan.edit', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="settings" class="w-4 h-4 inline"></i> Pengaturan
+        </a>
+        <a href="{{ route('ujian.susulan.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-400 dark:hover:bg-indigo-900/30">
+            <i data-lucide="calendar-clock" class="w-4 h-4 inline"></i> Susulan
+        </a>
+        <div x-data="{ openBackup: false }" class="inline-block">
+            <button type="button" @click="openBackup = true" class="px-4 py-2 rounded-xl text-sm font-semibold border border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/30">
+                <i data-lucide="download-cloud" class="w-4 h-4 inline"></i> Backup Data
+            </button>
+            <div x-show="openBackup" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" style="display: none;">
+                <form method="POST" action="{{ route('ujian.backup', $ujian) }}" class="bg-white dark:bg-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl text-left" @click.outside="openBackup = false" onsubmit="setTimeout(() => document.getElementById('global-loading-spinner')?.classList.add('hidden'), 500)">
+                    @csrf
+                    <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100">Konfirmasi Password</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 whitespace-normal">Silakan masukkan password admin Anda untuk mendownload backup data ujian ini.</p>
+                    <div>
+                        <input type="password" name="password" required class="form-input w-full" placeholder="Password Admin">
+                    </div>
+                    <div class="flex justify-end gap-2 pt-2">
+                        <button type="button" @click="openBackup = false" class="btn-secondary px-4 py-2 rounded-xl text-sm">Batal</button>
+                        <button type="submit" class="btn-primary px-4 py-2 rounded-xl text-sm font-bold" @click="setTimeout(() => openBackup = false, 500)">Download Backup</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        @unless($ujian->status === 'draft')
+        <a href="{{ route('ujian.monitor.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="radar" class="w-4 h-4 inline"></i> Pemantauan Live
+        </a>
+        @endunless
+        {{-- Nilai Esai/Hasil/Pembahasan TIDAK ikut disembunyikan saat draft — ujian yg dibuka
+             kembali dari status ditutup (utk revisi soal) balik jadi draft juga, tapi data
+             hasil/attempt lama yg sudah ada tak boleh "hilang" dari UI cuma krn itu. Cuma
+             ujian draft yg BELUM PERNAH pakai kelas (baru dibuat) yg link ini disembunyikan. --}}
+        @unless($ujian->status === 'draft' && $ujian->kelas->isEmpty())
+        <a href="{{ route('ujian.grading.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="pencil-line" class="w-4 h-4 inline"></i> Nilai Esai
+        </a>
+        <a href="{{ route('ujian.hasil.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="table-2" class="w-4 h-4 inline"></i> Hasil & Transfer
+        </a>
+        <a href="{{ route('ujian.analisis.index', $ujian) }}" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
+            <i data-lucide="file-spreadsheet" class="w-4 h-4 inline"></i> Analisis Hasil
+        </a>
+        <form method="POST" action="{{ route('ujian.pembahasan.toggle', $ujian) }}">
+            @csrf
+            <button type="submit" class="px-4 py-2 rounded-xl text-sm font-semibold border {{ $ujian->tampilkan_pembahasan ? 'border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20' : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700' }}">
+                <i data-lucide="{{ $ujian->tampilkan_pembahasan ? 'eye' : 'eye-off' }}" class="w-4 h-4 inline"></i>
+                Pembahasan {{ $ujian->tampilkan_pembahasan ? 'Dirilis' : 'Disembunyikan' }}
+            </button>
+        </form>
+        @endunless
+        @if($ujian->status === 'draft')
+        <form method="POST" action="{{ route('ujian.publish', $ujian) }}">
+            @csrf
+            <button type="submit" class="btn-primary px-4 py-2 rounded-xl text-sm font-bold"><i data-lucide="send" class="w-4 h-4 inline"></i> Terbitkan</button>
+        </form>
+        @elseif($ujian->status === 'published')
+        @can('close', $ujian)
+        <form method="POST" action="{{ route('ujian.close', $ujian) }}" onsubmit="return confirmAction(this, 'Tutup ujian ini? Siswa tidak bisa lagi memulai/melanjutkan.', 'red')">
+            @csrf
+            <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700">Tutup Ujian</button>
+        </form>
+        @endcan
+        @elseif($ujian->status === 'closed')
+        @can('reopen', $ujian)
+        <form method="POST" action="{{ route('ujian.reopen', $ujian) }}" onsubmit="return confirmAction(this, 'Buka kembali ujian ini? Statusnya balik jadi draf — soal bisa diedit lagi, siswa belum bisa mulai sampai diterbitkan ulang.', 'orange')">
+            @csrf
+            <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                <i data-lucide="rotate-ccw" class="w-4 h-4 inline"></i> Buka Kembali
+            </button>
+        </form>
+        @endcan
+        @endif
+    </div>
+
+    {{-- Kelas ter-assign --}}
+    <div class="card p-6 space-y-4">
+        <div class="flex items-center justify-between">
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Kelas & Token Masuk</h2>
+        </div>
+        @if($ujian->butuhSatuKelas())
+        <p class="text-xs text-amber-600 dark:text-amber-400">Target nilai Sumatif — ujian ini hanya boleh untuk satu kelas.</p>
+        @elseif($bolehAturKelas)
+        <p class="text-xs text-slate-400">Cuma kelas yang benar-benar diajar mapel ini (via data Ngajar) yang muncul di sini. Token masuk dibagi rata per TINGKAT — semua kelas dalam satu tingkat memakai token yang sama.</p>
+        @else
+        <p class="text-xs text-slate-400">Kelas ditetapkan oleh admin/pengelola. Token masuk dibagi rata per TINGKAT — semua kelas dalam satu tingkat memakai token yang sama.</p>
+        @endif
+
+        @if($bolehAturKelas)
+        @php
+            // Gabung kelas yg valid (via Ngajar) DENGAN kelas yg SUDAH ter-assign sebelumnya —
+            // supaya kelas lama yg mungkin sudah tak "valid" lagi (mis. Ngajar-nya dihapus, atau
+            // mapel ujian baru diganti) tetap kelihatan di sini (bisa dilepas manual), bukan
+            // diam2 hilang dari daftar pilihan tanpa penjelasan.
+            $kelasOpsi = $kelasPilihan->concat($ujian->kelas->pluck('kelas')->filter())
+                ->unique('uuid')->sortBy(fn($k) => [$k->tingkat, $k->kelas]);
+        @endphp
+        <form method="POST" action="{{ route('ujian.kelas.sync', $ujian) }}" class="space-y-3">
+            @csrf
+            <select name="id_kelas[]" multiple {{ $ujian->butuhSatuKelas() ? '' : 'multiple' }} class="form-select h-32" {{ $ujian->isClosed() ? 'disabled' : '' }}>
+                @forelse($kelasOpsi as $k)
+                    <option value="{{ $k->uuid }}" @selected($ujian->kelas->pluck('id_kelas')->contains($k->uuid))>{{ $k->tingkat }}{{ $k->kelas }}</option>
+                @empty
+                    <option value="" disabled>Belum ada kelas yang diajar mapel ini (cek data Ngajar)</option>
+                @endforelse
+            </select>
+            @unless($ujian->isClosed())
+            <button type="submit" class="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">Simpan Kelas</button>
+            @endunless
+        </form>
+        @endif
+
+        {{-- Guru pengampu SEMUA kelas disimpan lewat SATU form + SATU tombol (bukan
+             form+tombol per kelas) — form-nya sengaja ditaruh di sini (bukan membungkus
+             listing di bawah) krn tiap tingkat juga punya form "Buat Token Baru" sendiri,
+             dan form HTML tidak boleh bersarang. Tiap <select> pengampu di bawah dikaitkan
+             ke form ini lewat atribut form="form-pengampu", bukan lewat nesting DOM. --}}
+        @unless($ujian->isClosed())
+        <form id="form-pengampu" method="POST" action="{{ route('ujian.kelas.pengampu.batch', $ujian) }}">@csrf</form>
+        @endunless
+
+        <div class="divide-y divide-slate-100 dark:divide-slate-700">
+            @forelse($ujian->kelas->sortBy(fn($uk) => [$uk->kelas?->tingkat, $uk->kelas?->kelas])->groupBy(fn($uk) => $uk->kelas?->tingkat) as $tingkat => $grup)
+            <div class="py-3 space-y-2.5">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="font-semibold text-sm">
+                            @if($tingkat)Tingkat {{ $tingkat }} — @endif
+                            {{ $grup->map(fn($uk) => $uk->kelas?->tingkat . $uk->kelas?->kelas)->filter()->implode(', ') }}
+                        </p>
+                        <p class="text-xs font-mono text-slate-500 mt-0.5">Token: <b>{{ $grup->first()->token_masuk ?? '—' }}</b></p>
+                    </div>
+                    @unless($ujian->isClosed())
+                    <form method="POST" action="{{ route('ujian.kelas.token', [$ujian, $grup->first()]) }}" onsubmit="return confirmAction(this, 'Buat token baru untuk SEMUA kelas tingkat {{ $tingkat }}? Token lama tidak berlaku lagi.', 'orange')">
+                        @csrf
+                        <button type="submit" class="text-xs text-primary hover:underline">Buat Token Baru</button>
+                    </form>
+                    @endunless
+                </div>
+
+                {{-- Guru pengampu — per KELAS (bukan per tingkat), krn kelas berbeda dlm satu
+                     tingkat bisa diajar guru berbeda. Dropdown SELALU tampil (bukan cuma
+                     saat 2+ kandidat) supaya admin bisa ganti pengampu kapan saja; pilihan
+                     tetap dibatasi ke guru yg beneran punya data Ngajar mapel ini di kelas
+                     itu — kalau guru yg dicari belum muncul, tambah dulu di Data Ngajar. --}}
+                <div class="pl-3 border-l-2 border-slate-100 dark:border-slate-700 space-y-1.5">
+                    @foreach($grup as $uk)
+                    @php
+                        $opsi = $guruPengampuOpsi[$uk->uuid] ?? ['ngajar' => collect(), 'lain' => collect()];
+                        $guruNgajar = is_array($opsi) ? ($opsi['ngajar'] ?? collect()) : $opsi;
+                        $guruLain = is_array($opsi) ? ($opsi['lain'] ?? collect()) : collect();
+                        $isPengampuLuar = $uk->pengampuLuarNgajar();
+                    @endphp
+                    <div class="py-1 border-b border-slate-50 dark:border-slate-800 last:border-b-0 space-y-1">
+                        <div class="flex items-center justify-between gap-3 text-xs flex-wrap sm:flex-nowrap">
+                            <span class="font-medium text-slate-600 dark:text-slate-300">{{ $uk->kelas?->tingkat }}{{ $uk->kelas?->kelas }}</span>
+                            @if(!$ujian->isClosed())
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <select name="pengampu[{{ $uk->uuid }}]" form="form-pengampu" class="form-select py-1 text-xs">
+                                    <option value="">— pilih pengampu —</option>
+                                    @if($guruNgajar->isNotEmpty())
+                                        <optgroup label="Guru Mapel Resmi (Data Ngajar)">
+                                            @foreach($guruNgajar as $g)
+                                                <option value="{{ $g->uuid }}" @selected($uk->id_guru_pengampu === $g->uuid)>{{ $g->nama }} (Guru Mapel)</option>
+                                            @endforeach
+                                        </optgroup>
+                                    @endif
+                                    @if($guruLain->isNotEmpty())
+                                        <optgroup label="Guru Lainnya (Di Luar Data Ngajar / Pengganti)">
+                                            @foreach($guruLain as $g)
+                                                <option value="{{ $g->uuid }}" @selected($uk->id_guru_pengampu === $g->uuid)>{{ $g->nama }} (Pengganti)</option>
+                                            @endforeach
+                                        </optgroup>
+                                    @endif
+                                </select>
+                                @if($isPengampuLuar)
+                                    <div class="relative inline-flex" x-data="{ openBadgeInfo: false }">
+                                        <button type="button"
+                                                @mouseenter="openBadgeInfo = true"
+                                                @mouseleave="openBadgeInfo = false"
+                                                @click.stop="openBadgeInfo = !openBadgeInfo"
+                                                @click.outside="openBadgeInfo = false"
+                                                class="badge bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0 text-[10px] cursor-pointer hover:bg-amber-200/80 dark:hover:bg-amber-900/60 transition inline-flex items-center gap-1 font-semibold focus:outline-none select-none"
+                                                title="Klik atau arahkan kursor untuk info pengampu di luar data ngajar">
+                                            <i data-lucide="info" class="w-3 h-3 shrink-0"></i>
+                                            <span>Di Luar Data Ngajar</span>
+                                        </button>
+                                        <div x-show="openBadgeInfo"
+                                             x-cloak
+                                             x-transition:enter="transition ease-out duration-150"
+                                             x-transition:enter-start="opacity-0 translate-y-1 scale-95"
+                                             x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+                                             x-transition:leave="transition ease-in duration-100"
+                                             x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+                                             x-transition:leave-end="opacity-0 translate-y-1 scale-95"
+                                             @click.stop
+                                             class="absolute z-50 right-0 top-full mt-1.5 w-72 sm:w-80 max-w-[calc(100vw-2rem)] p-3 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 shadow-xl border border-amber-200 dark:border-amber-800/80 text-left text-[11px] leading-relaxed">
+                                            <div class="flex items-start gap-2">
+                                                <span class="p-1 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">
+                                                    <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+                                                </span>
+                                                <div class="space-y-1">
+                                                    <p class="font-bold text-amber-800 dark:text-amber-300 text-xs">Di Luar Data Ngajar</p>
+                                                    <p class="text-slate-600 dark:text-slate-300">
+                                                        Guru pengampu ini bukan pengajar mapel resmi kelas tersebut di data ngajar sekolah.
+                                                    </p>
+                                                    <p class="text-slate-600 dark:text-slate-300">
+                                                        Pengampu dapat memantau ujian &amp; menilai esai, tetapi <strong class="text-amber-700 dark:text-amber-400">tidak bisa mengumpulkan hasil ujian</strong> langsung ke buku nilai rapor.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                @endif
+                            </div>
+                            @else
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                <span class="text-slate-500">Pengampu: {{ $uk->guruPengampu?->nama ?? '—' }}</span>
+                                @if($isPengampuLuar)
+                                    <div class="relative inline-flex" x-data="{ openBadgeInfo: false }">
+                                        <button type="button"
+                                                @mouseenter="openBadgeInfo = true"
+                                                @mouseleave="openBadgeInfo = false"
+                                                @click.stop="openBadgeInfo = !openBadgeInfo"
+                                                @click.outside="openBadgeInfo = false"
+                                                class="badge bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0 text-[10px] cursor-pointer hover:bg-amber-200/80 dark:hover:bg-amber-900/60 transition inline-flex items-center gap-1 font-semibold focus:outline-none select-none"
+                                                title="Klik atau arahkan kursor untuk info pengampu di luar data ngajar">
+                                            <i data-lucide="info" class="w-3 h-3 shrink-0"></i>
+                                            <span>Di Luar Data Ngajar</span>
+                                        </button>
+                                        <div x-show="openBadgeInfo"
+                                             x-cloak
+                                             x-transition:enter="transition ease-out duration-150"
+                                             x-transition:enter-start="opacity-0 translate-y-1 scale-95"
+                                             x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+                                             x-transition:leave="transition ease-in duration-100"
+                                             x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+                                             x-transition:leave-end="opacity-0 translate-y-1 scale-95"
+                                             @click.stop
+                                             class="absolute z-50 right-0 top-full mt-1.5 w-72 sm:w-80 max-w-[calc(100vw-2rem)] p-3 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 shadow-xl border border-amber-200 dark:border-amber-800/80 text-left text-[11px] leading-relaxed">
+                                            <div class="flex items-start gap-2">
+                                                <span class="p-1 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">
+                                                    <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+                                                </span>
+                                                <div class="space-y-1">
+                                                    <p class="font-bold text-amber-800 dark:text-amber-300 text-xs">Di Luar Data Ngajar</p>
+                                                    <p class="text-slate-600 dark:text-slate-300">
+                                                        Guru pengampu ini bukan pengajar mapel resmi kelas tersebut di data ngajar sekolah.
+                                                    </p>
+                                                    <p class="text-slate-600 dark:text-slate-300">
+                                                        Pengampu dapat memantau ujian &amp; menilai esai, tetapi <strong class="text-amber-700 dark:text-amber-400">tidak bisa mengumpulkan hasil ujian</strong> langsung ke buku nilai rapor.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                @endif
+                            </div>
+                            @endif
+                        </div>
+                    </div>
+                    @endforeach
+                </div>
+            </div>
+            @empty
+            <p class="text-sm text-slate-400 py-3">Belum ada kelas ditetapkan.</p>
+            @endforelse
+        </div>
+
+        @unless($ujian->isClosed() || $ujian->kelas->isEmpty())
+        <div class="pt-3 text-right">
+            <button type="submit" form="form-pengampu" class="btn-primary px-4 py-2 rounded-xl text-xs font-bold">Simpan Guru Pengampu</button>
+        </div>
+        @endunless
+    </div>
+</div>
+@endsection
+
+
+

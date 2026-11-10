@@ -1,0 +1,3101 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Controllers\Concerns\InteractsWithAi;
+use App\Models\AiTeacherAudioAsset;
+use App\Models\AiTeacherAudioLink;
+use App\Models\AiTeacherHistory;
+use App\Models\Classroom;
+use App\Models\ClassroomMaterial;
+use App\Models\Setting;
+use App\Models\TeacherPresentation;
+use App\Services\GameQuizImporter;
+use App\Jobs\GenerateTeacherAudioJob;
+use App\Services\GeminiService;
+use App\Services\TeacherMaterialException;
+use App\Services\TeacherMaterialService;
+use App\Support\Audit;
+use App\Support\BlueprintDocument;
+use App\Support\BlueprintDocxBuilder;
+use App\Support\DocumentText;
+use App\Support\LearningDocument;
+use App\Support\LearningDocxBuilder;
+use App\Support\ModulAktif;
+use App\Support\PresentationSlides;
+use App\Models\Pelajaran;
+use App\Models\Semester;
+use App\Support\QuizDocument;
+use App\Support\QuizDocxBuilder;
+use App\Support\QuizImageEnricher;
+use App\Support\SchoolLetterhead;
+use App\Support\ProsemProtaDocument;
+use App\Support\ProsemProtaDocxBuilder;
+use App\Support\StandardCurriculumCp;
+use App\Support\TeacherOutputLanguage;
+use App\Support\TpAtpDocument;
+use App\Support\TpAtpDocxBuilder;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Contracts\View\View;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use App\Models\User;
+use Illuminate\Support\Str;
+use RuntimeException;
+use ZipArchive;
+
+/*
+| Asisten Guru (FASE 3). Panel berisi 3 tool untuk mempercepat pekerjaan guru:
+| Generator Soal, Perangkum Materi, dan Catatan Siswa. Semua memanggil Gemini
+| lewat GeminiService; rate limit + audit via trait InteractsWithAi. Digate
+| role:guru,walikelas di route.
+*/
+class AiTeacherController extends Controller
+{
+    use InteractsWithAi;
+
+    private const QUIZ_TYPES = [
+        'pg_kompleks' => 'Pilihan Ganda Kompleks',
+        'pg' => 'Pilihan Ganda',
+        'benar_salah' => 'Benar/Salah',
+        'mencocokkan' => 'Mencocokkan',
+        'isian' => 'Isian',
+    ];
+
+    private const LEGACY_QUIZ_TYPES = [
+        'pg' => ['pg'],
+        'esai' => ['isian'],
+        'campuran' => ['pg_kompleks', 'pg', 'benar_salah', 'mencocokkan', 'isian'],
+    ];
+
+    public function __construct(
+        private GeminiService $gemini,
+        private TeacherMaterialService $materials,
+    ) {}
+
+    /** GET /ai/teacher - halaman panel Asisten Guru. */
+    public function index(): View
+    {
+        $histories = AiTeacherHistory::query()
+            ->where('user_uuid', auth()->id())
+            ->latest()
+            ->limit(100)
+            ->get()
+            ->map(fn (AiTeacherHistory $history) => $this->historyPayload($history))
+            ->values();
+
+        $user = auth()->user();
+
+        $arenaClassrooms = collect();
+        $arenaClassroomsDiag = null;
+        if (ModulAktif::aktif('arena_belajar')) {
+            $manageableClassrooms = Classroom::with(['rombel', 'pelajaran'])
+                ->orderBy('title')
+                ->get()
+                ->filter(fn (Classroom $c) => $user->can('manage', $c))
+                ->values();
+
+            $arenaClassrooms = $manageableClassrooms
+                ->map(fn (Classroom $c) => [
+                    'uuid' => $c->uuid,
+                    'title' => $c->title,
+                ]);
+
+
+        }
+
+        $hasApiKey = $user->hasGeminiApiKey();
+        $canvaStatus = app(\App\Services\CanvaConnectService::class)->statusPayload($user);
+
+        $tpatpDocuments = AiTeacherHistory::query()
+            ->where('user_uuid', $user->uuid)
+            ->where('type', 'tpatp')
+            ->latest()
+            ->limit(30)
+            ->get()
+            ->map(fn (AiTeacherHistory $h) => [
+                'uuid' => $h->uuid,
+                'title' => $h->title,
+                'answer' => $h->answer,
+                'metadata' => $h->metadata ?? [],
+                'created_at' => $h->created_at?->toIso8601String(),
+                'created_at_human' => $h->created_at?->locale('id')->diffForHumans(),
+            ])
+            ->values();
+
+        $activeSemesterModel = Semester::aktif() ?? Semester::first();
+
+        return view('ai.teacher', [
+            'histories' => $histories,
+            'tpatpDocuments' => $tpatpDocuments,
+            'quotaUsage' => $this->aiPublicQuotaUsage(true, $user->uuid),
+            'canViewQuotaUsage' => false,
+            'arenaClassrooms' => $arenaClassrooms,
+            'arenaClassroomsDiag' => $arenaClassroomsDiag,
+            'arenaBelajarAktif' => ModulAktif::aktif('arena_belajar'),
+            'launcherAktif' => (Setting::get('tp_launcher_aktif', '1') ?? '1') === '1',
+            'needsApiKeySetup' => ! $hasApiKey,
+            'canvaStatus' => $canvaStatus,
+            'teacherMaterials' => $this->materials->listPayloads($user->uuid),
+            'pelajarans' => Pelajaran::orderBy('urutan')->get(['uuid', 'nama', 'kode', 'jp']),
+            'standardCps' => StandardCurriculumCp::all(),
+            'activeTahunAjaran' => $activeSemesterModel?->tahun ?? '2026/2027',
+            'activeSemester' => (int) ($activeSemesterModel?->semester ?? 1),
+            'defaultCalendarEventsGanjil' => ProsemProtaDocument::getDefaultCalendarEvents(true),
+            'defaultCalendarEventsGenap' => ProsemProtaDocument::getDefaultCalendarEvents(false),
+            'weekColumnsGanjil' => ProsemProtaDocument::getWeekColumns(true),
+            'weekColumnsGenap' => ProsemProtaDocument::getWeekColumns(false),
+            'externalAccounts' => [
+                'has_gemini_api_key' => $hasApiKey,
+                'gemini_api_key_masked' => $user->geminiApiKeyMasked(),
+                'canva_belajar_id' => $user->canva_belajar_id,
+            ],
+        ]);
+    }
+
+    /**
+     * GET /ai/teacher/materials — daftar buku/materi unggahan guru (Generator Soal RAG).
+     * Dipakai UI untuk pilih ulang tanpa upload, dan polling status pending/partial.
+     */
+    public function materials(Request $request): JsonResponse
+    {
+        return response()->json([
+            'ok' => true,
+            'materials' => $this->materials->listPayloads($request->user()->uuid),
+        ]);
+    }
+
+    /**
+     * POST /ai/teacher/external-prompt — susun prompt berformat untuk ditempel di Gemini web.
+     * Tidak memanggil GeminiService; generate memakai akun Google guru di gemini.google.com.
+     */
+    public function externalPrompt(Request $request): JsonResponse
+    {
+        $tool = $request->validate([
+            'tool' => ['required', 'in:quiz,blueprint,learning,summary,feedback,chat,tpatp,prosemprota'],
+        ])['tool'];
+
+        $built = match ($tool) {
+            'quiz' => $this->composeQuiz($request),
+            'blueprint' => $this->composeBlueprint($request),
+            'learning' => $this->composeLearningForExternal($request),
+            'summary' => $this->composeSummary($request),
+            'feedback' => $this->composeFeedback($request),
+            'chat' => $this->composeChat($request),
+            'tpatp' => $this->composeTpAtp($request),
+            'prosemprota' => $this->composeTpAtp($request),
+        };
+
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        // Cadangan Gemini web tidak bisa unggah foto otomatis dari SIMS.
+        if (! empty($built['vision_images'])) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Foto buku hanya digenerate di SIMS lewat API AI Studio (tombol Buat Soal / Buat RPM). Cadangan Gemini web tidak mendukung lampiran foto otomatis.',
+            ], 422);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'prompt' => $this->buildExternalPastePrompt($built),
+            'gemini_url' => 'https://gemini.google.com/app',
+            'tool' => $tool,
+            'title' => (string) ($built['title'] ?? $built['history']['title'] ?? 'Asisten Guru'),
+        ]);
+    }
+
+    /**
+     * POST /ai/teacher/external-result — terima jawaban yang ditempel dari Gemini web.
+     */
+    public function externalResult(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'tool' => ['required', 'in:quiz,blueprint,learning,summary,feedback,chat,tpatp,prosemprota'],
+            'title' => ['nullable', 'string', 'max:180'],
+            'answer' => ['required', 'string', 'min:1', 'max:100000'],
+        ]);
+
+        $meta = match ($data['tool']) {
+            'quiz' => ['type' => 'quiz', 'type_label' => 'Generator Soal'],
+            'blueprint' => ['type' => 'blueprint', 'type_label' => 'Kisi-kisi'],
+            'learning' => ['type' => 'rpp', 'type_label' => 'RPM Learning'],
+            'summary' => ['type' => 'summary', 'type_label' => 'Perangkum Materi'],
+            'feedback' => ['type' => 'feedback', 'type_label' => 'Catatan Siswa'],
+            'chat' => ['type' => 'gemini_chat', 'type_label' => 'Nalar Guru'],
+            'tpatp' => ['type' => 'tpatp', 'type_label' => 'TP & ATP'],
+            'prosemprota' => ['type' => 'prosem_prota', 'type_label' => 'Prosem & Prota'],
+        };
+
+        $title = trim((string) ($data['title'] ?? '')) ?: $meta['type_label'];
+        $answer = SchoolLetterhead::ensurePrefix(trim($data['answer']));
+
+        $history = $this->storeHistory($request->user()->uuid, [
+            'type' => $meta['type'],
+            'type_label' => $meta['type_label'],
+            'title' => $title,
+            'metadata' => [
+                'via' => 'gemini_web',
+            ],
+        ], $answer);
+
+        return response()->json([
+            'ok' => true,
+            'answer' => $answer,
+            'history' => $history,
+        ]);
+    }
+
+    /** POST /ai/teacher/chat — cadangan API sekolah (UI utama memakai external-prompt). */
+    public function chat(Request $request): JsonResponse
+    {
+        $built = $this->composeChat($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        $options = [
+            'thinking_level' => 'low',
+        ];
+        if (! empty($built['history_turns'])) {
+            $options['history'] = $built['history_turns'];
+        }
+        if (! empty($built['answer_style'])) {
+            $options['answer_style'] = $built['answer_style'];
+        }
+        if (! empty($built['long_timeout'])) {
+            $options['timeout'] = (int) config('ai.long_timeout');
+        }
+
+        return $this->respond(
+            $request,
+            'teacher_chat',
+            $built['system'],
+            $built['prompt'],
+            (int) ($built['max_output_tokens'] ?? 4096),
+            $options,
+            $built['history'],
+        );
+    }
+
+    /**
+     * @return array{system:string,prompt:string,answer_style?:string,title:string,history:array,history_turns?:list<array{role:string,text:string}>,max_output_tokens?:int,long_timeout?:bool}|JsonResponse
+     */
+    private function composeChat(Request $request): array|JsonResponse
+    {
+        $data = $request->validate([
+            'message' => ['required', 'string', 'max:'.config('ai.max_input_chars')],
+            'history' => ['nullable', 'array', 'max:20'],
+            'history.*.role' => ['required_with:history', 'in:user,assistant'],
+            'history.*.text' => ['required_with:history', 'string', 'max:8000'],
+        ]);
+
+        $historyTurns = collect($data['history'] ?? [])
+            ->map(fn (array $turn) => [
+                'role' => $turn['role'],
+                'text' => $turn['text'],
+            ])
+            ->take(-12)
+            ->values()
+            ->all();
+
+        $message = trim($data['message']);
+
+        if ($this->messageLooksLikeQuizRequest($message)) {
+            $params = $this->inferQuizParamsFromMessage($message);
+            $formatInstruction = $this->quizFormatInstruction(
+                $params['jumlah'],
+                $params['jenis_soal'],
+                $params['tingkat'],
+                $params['jenjang'],
+                $params['topik'],
+            );
+            $jenis = $this->quizTypeSummary($params['jenis_soal']);
+            $jenjangLine = $params['jenjang'] ? " untuk jenjang {$params['jenjang']}" : '';
+
+            $prompt = "Buat {$params['jumlah']} soal ({$jenis}) dengan tingkat kesulitan "
+                ."{$params['tingkat']}{$jenjangLine} tentang topik: \"{$params['topik']}\".\n\n"
+                ."PERMINTAAN ASLI GURU:\n{$message}\n\n"
+                .$formatInstruction;
+
+            return [
+                'system' => (string) config('ai.teacher.quiz'),
+                'prompt' => $prompt,
+                'answer_style' => 'Tulis sebagai dokumen soal teks polos siap cetak sesuai format yang diminta. JANGAN memakai Markdown, heading #, atau bullet dekoratif.',
+                'title' => Str::limit($params['topik'] !== '' ? $params['topik'] : $message, 90),
+                'history_turns' => $historyTurns,
+                'max_output_tokens' => $this->quizMaxOutputTokens($params['jumlah'], $params['tingkat']),
+                'long_timeout' => true,
+                'history' => [
+                    'type' => 'gemini_chat',
+                    'type_label' => 'Nalar Guru',
+                    'title' => Str::limit($params['topik'] !== '' ? $params['topik'] : $message, 90),
+                    'metadata' => [
+                        'prompt' => Str::limit($message, 2000, ''),
+                        'turns' => count($historyTurns) + 1,
+                        'mode' => 'quiz_format',
+                        'jumlah' => $params['jumlah'],
+                        'jenis_soal' => $params['jenis_soal'],
+                        'tingkat' => $params['tingkat'],
+                        'jenjang' => $params['jenjang'],
+                    ],
+                ],
+            ];
+        }
+
+        $quizFormatReminder = "\n\nPENTING: Jika pengguna meminta soal, kuis, atau soal evaluasi, "
+            .'jawab HANYA dengan dokumen soal teks polos mengikuti format Generator Soal '
+            .'(kop sekolah, SOAL EVALUASI, identitas, Petunjuk Pengerjaan, Bagian soal, '
+            .'Kunci Jawaban & Pedoman Penilaian). Jangan pakai Markdown.';
+
+        $nalarAnswerStyle = SchoolLetterhead::asPromptBlock()."\n\n"
+            .'Setiap jawaban Nalar Guru WAJIB teks polos berstruktur, siap disalin '
+            .'ke Word/WhatsApp/Google Docs. Mulai SELALU dengan kop surat di atas. '
+            .'Langsung ke isi tanpa pembuka/penutup basa-basi. '
+            .'Judul bagian pakai HURUF KAPITAL di baris sendiri + baris kosong. '
+            .'Poin pakai "- " atau nomor "1. 2. 3." (satu per baris). '
+            .'Paragraf pendek, satu baris kosong antar bagian. '
+            .'JANGAN memakai Markdown (#, **, *, ```, tabel pipe) atau emoji berlebih.';
+
+        return [
+            'system' => (string) config('ai.teacher.chat').$quizFormatReminder,
+            'prompt' => $message,
+            'answer_style' => $nalarAnswerStyle,
+            'title' => Str::limit($message, 90),
+            'history_turns' => $historyTurns,
+            'history' => [
+                'type' => 'gemini_chat',
+                'type_label' => 'Nalar Guru',
+                'title' => Str::limit($message, 90),
+                'metadata' => [
+                    'prompt' => Str::limit($message, 2000, ''),
+                    'turns' => count($historyTurns) + 1,
+                    'mode' => 'chat',
+                ],
+            ],
+        ];
+    }
+
+    /** Compose learning tanpa bentrok field `tool` eksternal (quiz|learning|…). */
+    private function composeLearningForExternal(Request $request): array|JsonResponse
+    {
+        $learningTool = $request->input('learning_tool', $request->input('learning.tool', 'rpp'));
+        $dup = $request->duplicate();
+        $dup->merge(['tool' => $learningTool]);
+
+        return $this->composeLearning($dup);
+    }
+
+    /** Gabungkan system + gaya + permintaan jadi satu teks siap tempel di Gemini web. */
+    private function buildExternalPastePrompt(array $built): string
+    {
+        $parts = [];
+        $system = trim((string) ($built['system'] ?? ''));
+        $answerStyle = trim((string) ($built['answer_style'] ?? ''));
+        $prompt = trim((string) ($built['prompt'] ?? ''));
+
+        if ($system !== '') {
+            $parts[] = "PERAN / INSTRUKSI SISTEM:\n{$system}";
+        }
+        if ($answerStyle !== '') {
+            $parts[] = "GAYA JAWABAN:\n{$answerStyle}";
+        }
+        if (! empty($built['history_turns']) && is_array($built['history_turns'])) {
+            $lines = [];
+            foreach ($built['history_turns'] as $turn) {
+                $role = (($turn['role'] ?? '') === 'assistant') ? 'Asisten' : 'Guru';
+                $text = trim((string) ($turn['text'] ?? ''));
+                if ($text !== '') {
+                    $lines[] = "{$role}: {$text}";
+                }
+            }
+            if ($lines !== []) {
+                $parts[] = "RIWAYAT PERCAKAPAN:\n".implode("\n\n", $lines);
+            }
+        }
+        $parts[] = "PERMINTAAN:\n{$prompt}";
+        $parts[] = 'Jawab langsung sesuai instruksi di atas. Jangan menambah pembuka atau penjelasan di luar format yang diminta.';
+
+        return implode("\n\n---\n\n", $parts);
+    }
+
+    /** Deteksi permintaan pembuatan soal/kuis di chat Gemini. */
+    private function messageLooksLikeQuizRequest(string $message): bool
+    {
+        return (bool) preg_match(
+            '/\b(soal|kuis|quiz|evaluasi|ulangan|pilihan\s*ganda|benar\s*\/?\s*salah|isian|mencocokkan|pg\b)/iu',
+            $message,
+        );
+    }
+
+    /**
+     * Infer parameter soal dari teks chat (fallback ke default Generator Soal).
+     *
+     * @return array{jumlah:int,jenis_soal:list<string>,tingkat:string,jenjang:?string,topik:string}
+     */
+    private function inferQuizParamsFromMessage(string $message): array
+    {
+        $jumlah = 5;
+        if (preg_match('/\b(\d{1,2})\s*(soal|butir|nomor|item)\b/iu', $message, $m)
+            || preg_match('/\b(buat|bikin|generate)\s+(\d{1,2})\b/iu', $message, $m2)) {
+            $n = (int) ($m[1] ?? $m2[2] ?? 5);
+            $jumlah = max(1, min(20, $n));
+        }
+
+        $tingkat = 'sedang';
+        if (preg_match('/\b(mudah|sedang|sulit|sukar)\b/iu', $message, $tm)) {
+            $tingkat = strtolower($tm[1]) === 'sukar' ? 'sulit' : strtolower($tm[1]);
+        }
+
+        $jenjang = null;
+        if (preg_match('/\b(kelas\s*[0-9IVX]+(?:\s*[A-Z])?|\bSD\b|\bSMP\b|\bSMA\b|\bSMK\b)(?:\s*[\/,]?\s*semester\s*\d+)?/iu', $message, $jm)) {
+            $jenjang = trim($jm[0]);
+        }
+
+        $jenisSoal = [];
+        $map = [
+            'pg_kompleks' => '/pilihan\s*ganda\s*kompleks|pg\s*kompleks|multi\s*kunci/iu',
+            'pg' => '/pilihan\s*ganda(?!\s*kompleks)|\bpg\b(?!\s*kompleks)/iu',
+            'benar_salah' => '/benar\s*\/?\s*salah|true\s*\/?\s*false|\bB\/S\b/iu',
+            'mencocokkan' => '/mencocokkan|menjodohkan|matching/iu',
+            'isian' => '/\bisian\b|essay|esai|uraian/iu',
+        ];
+        foreach ($map as $type => $pattern) {
+            if (preg_match($pattern, $message)) {
+                $jenisSoal[] = $type;
+            }
+        }
+        if ($jenisSoal === []) {
+            // Default sama dengan form Generator Soal (PG).
+            $jenisSoal = ['pg'];
+        }
+
+        // Topik: buang frasa perintah umum, sisakan inti.
+        $topik = preg_replace(
+            '/\b(buatkan|buat|bikin|generate|tolong|mohon|segera)\b/iu',
+            ' ',
+            $message,
+        );
+        $topik = preg_replace(
+            '/\b(\d{1,2}\s*)?(soal|kuis|quiz|evaluasi|ulangan|butir)\b/iu',
+            ' ',
+            (string) $topik,
+        );
+        $topik = preg_replace(
+            '/\b(pilihan\s*ganda\s*kompleks|pilihan\s*ganda|benar\s*\/?\s*salah|mencocokkan|isian|mudah|sedang|sulit|sukar)\b/iu',
+            ' ',
+            (string) $topik,
+        );
+        $topik = preg_replace('/\s+/u', ' ', trim((string) $topik));
+        if ($topik === '' || mb_strlen($topik) < 3) {
+            $topik = Str::limit($message, 120, '');
+        }
+
+        return [
+            'jumlah' => $jumlah,
+            'jenis_soal' => array_values(array_unique($jenisSoal)),
+            'tingkat' => $tingkat,
+            'jenjang' => $jenjang,
+            'topik' => Str::limit($topik, 200, ''),
+        ];
+    }
+
+    /** POST /ai/teacher/presentasi-from-chat — buat Studio Presentasi dari jawaban Gemini. */
+    public function presentasiFromChat(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:200'],
+            'outline' => ['required', 'string', 'max:50000'],
+            'subject' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $slides = PresentationSlides::fromOutline($data['outline']);
+
+        $item = TeacherPresentation::create([
+            'user_uuid' => $request->user()->uuid,
+            'title' => $data['title'],
+            'subject' => $data['subject'] ?? null,
+            'status' => 'draft',
+            'outline' => $data['outline'],
+            'slides' => $slides !== [] ? $slides : null,
+            'last_opened_at' => now(),
+        ]);
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'Outline dikirim ke Studio Presentasi.',
+            'redirect' => route('ai.teacher.presentasi.show', $item),
+            'presentation' => [
+                'uuid' => $item->uuid,
+                'title' => $item->title,
+                'subject' => $item->subject,
+                'status' => $item->status,
+                'updated_at' => optional($item->updated_at)->toIso8601String(),
+            ],
+        ]);
+    }
+
+    /**
+     * PUT/POST /ai/teacher/gemini-key — simpan API key Gemini pribadi (terenkripsi).
+     */
+    public function updateGeminiKey(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'gemini_api_key' => ['required', 'string', 'min:20', 'max:512'],
+        ], [
+            'gemini_api_key.required' => 'API key wajib diisi.',
+            'gemini_api_key.min' => 'API key terlalu pendek. Salin ulang dari Google AI Studio.',
+        ]);
+
+        $plain = trim(trim($data['gemini_api_key']), "\"'`");
+
+        try {
+            $this->gemini->probeApiKey($plain);
+        } catch (RuntimeException $e) {
+            return response()->json([
+                'ok' => false,
+                'message' => $e->getMessage() ?: 'API key tidak valid atau belum aktif.',
+            ], 422);
+        }
+
+        $user = $request->user();
+        $user->setGeminiApiKey($plain);
+        $user->refresh();
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'API key disimpan. Generate berjalan di dalam SIMS memakai akun Gemini Anda.',
+            'accounts' => [
+                'has_gemini_api_key' => true,
+                'gemini_api_key_masked' => $user->geminiApiKeyMasked(),
+            ],
+        ]);
+    }
+
+    /** DELETE /ai/teacher/gemini-key — hapus API key pribadi. */
+    public function destroyGeminiKey(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $user->clearGeminiApiKey();
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'API key dihapus. Generate akan terkunci sampai key baru disimpan.',
+            'accounts' => [
+                'has_gemini_api_key' => false,
+                'gemini_api_key_masked' => null,
+            ],
+            'needs_api_key' => true,
+        ]);
+    }
+
+    /** Blok generate bila guru belum menyimpan API key Gemini pribadi. */
+    private function requireTeacherGeminiKey(Request $request): ?JsonResponse
+    {
+        $user = $request->user();
+        if ($user->hasGeminiApiKey() && $user->plainGeminiApiKey() !== null) {
+            return null;
+        }
+
+        return response()->json([
+            'ok' => false,
+            'message' => 'Simpan API key Gemini dari Google AI Studio terlebih dahulu untuk generate di SIMS.',
+            'needs_api_key' => true,
+        ], 422);
+    }
+
+    /** API key pribadi wajib untuk generate di dalam SIMS. */
+    private function requireTeacherReady(Request $request): ?JsonResponse
+    {
+        return $this->requireTeacherGeminiKey($request);
+    }
+
+    /**
+     * POST /ai/teacher/quiz/send-arena — simpan teks soal ke session lalu buka form Arena.
+     */
+    public function sendToArena(Request $request): RedirectResponse
+    {
+        abort_unless(ModulAktif::aktif('arena_belajar'), 403, 'Modul Arena Belajar nonaktif.');
+
+        $data = $request->validate([
+            'classroom_id' => ['required', 'uuid', 'exists:classrooms,uuid'],
+            'raw_text' => ['required', 'string', 'max:50000'],
+            'title' => ['nullable', 'string', 'max:200'],
+        ]);
+
+        $classroom = Classroom::where('uuid', $data['classroom_id'])->firstOrFail();
+        $this->authorize('manage', $classroom);
+
+        if (! GameQuizImporter::looksLikeImportableQuiz($data['raw_text'])) {
+            return redirect()
+                ->route('ai.teacher.index', ['tab' => 'quiz'])
+                ->with('error', 'Teks belum berbentuk soal yang bisa diimpor. Buat soal lewat Nalar/Generator (ada nomor soal + opsi atau SOAL EVALUASI), lalu kirim lagi.');
+        }
+
+        session([
+            'arena_ai_import' => [
+                'raw_text' => $data['raw_text'],
+                'title' => $data['title'] ?? null,
+            ],
+        ]);
+
+        return redirect()
+            ->route('classroom.arena.create', $classroom)
+            ->with('success', 'Soal dari Asisten Guru siap diimpor. Periksa kunci jawaban lalu simpan.');
+    }
+
+    public function audioCreate(Request $request): JsonResponse
+    {
+        if ($blocked = $this->requireTeacherReady($request)) return $blocked;
+        $voiceProfiles = (array) config('ai.tts.voice_profiles', []);
+        $voices = array_keys(array_merge(...array_values($voiceProfiles)));
+        $voiceGenders = array_keys($voiceProfiles);
+        $languages = array_keys((array) config('ai.tts.languages', []));
+        $vibes = array_keys((array) config('ai.tts.vibes', []));
+        $styles = array_keys((array) config('ai.tts.styles', []));
+        $data = $request->validate([
+            'source_type' => ['required', 'in:history,free_text'], 'source_uuid' => ['nullable', 'uuid'],
+            'text' => ['nullable', 'string'],
+            'title' => ['required', 'string', 'max:180'],
+            'language' => ['required', 'in:'.implode(',', $languages)],
+            'voice_gender' => ['nullable', 'in:'.implode(',', $voiceGenders)],
+            'voice' => ['required', 'in:'.implode(',', $voices)],
+            'vibe' => ['nullable', 'in:'.implode(',', $vibes)],
+            'style' => ['nullable', 'in:'.implode(',', $styles)],
+            'tempo_percent' => ['nullable', 'integer', 'min:70', 'max:130'],
+        ]);
+        $data['voice_gender'] = $data['voice_gender'] ?? 'wanita';
+        $data['vibe'] = $data['vibe'] ?? $data['style'] ?? 'ceria';
+        $data['tempo_percent'] = (int) ($data['tempo_percent'] ?? 100);
+        $user = $request->user();
+        if ($data['source_type'] === 'history') {
+            $history = AiTeacherHistory::query()->where('uuid', $data['source_uuid'] ?? '')
+                ->where('user_uuid', $user->uuid)->firstOrFail();
+            $text = trim(strip_tags((string) $history->answer)); $sourceUuid = $history->uuid;
+        } else {
+            $text = trim(strip_tags((string) ($data['text'] ?? ''))); $sourceUuid = null;
+        }
+        if ($text === '') return response()->json(['ok' => false, 'message' => 'Teks untuk audio wajib diisi.'], 422);
+        $characters = mb_strlen($text);
+        preg_match_all('/[\p{L}\p{N}]+/u', $text, $wordMatches);
+        $words = count($wordMatches[0] ?? []);
+        $maxCharacters = (int) config('ai.tts.max_chars', 8000);
+        $maxWords = (int) config('ai.tts.max_words', 1200);
+        if ($characters > $maxCharacters || $words > $maxWords) {
+            return response()->json([
+                'ok' => false,
+                'message' => "Narasi maksimal {$maxWords} kata atau {$maxCharacters} karakter (sekitar 10 menit audio).",
+                'limits' => ['characters' => $maxCharacters, 'words' => $maxWords],
+            ], 422);
+        }
+        if ($limited = $this->aiRateLimited('teacher_tts', $user->uuid)) return $limited;
+        $this->markStaleTeacherAudioAsFailed($user->uuid);
+        $model = (string) config('ai.tts.model');
+        $hashSource = $data['language'] === 'id-ID' ? $text : "translated-v1\0{$data['language']}\0{$text}";
+        $hash = hash('sha256', $hashSource);
+        $stylePrompt = (string) config('ai.tts.vibes.'.$data['vibe'], config('ai.tts.styles.'.$data['vibe'], 'Natural dan jelas.'));
+        $existing = AiTeacherAudioAsset::query()->where('user_uuid', $user->uuid)->where('text_hash', $hash)
+            ->where('language', $data['language'])->where('voice', $data['voice'])
+            ->where('voice_gender', $data['voice_gender'])->where('vibe', $data['vibe'])->where('tempo_percent', $data['tempo_percent'])
+            ->where('style_prompt', $stylePrompt)->where('model', $model)
+            ->whereIn('status', ['queued', 'processing', 'ready'])->latest()->first();
+        if ($existing) return response()->json(['ok' => true, 'reused' => true, 'audio' => $this->audioPayload($existing)]);
+        $asset = AiTeacherAudioAsset::create([
+            'user_uuid' => $user->uuid, 'source_type' => $data['source_type'], 'source_uuid' => $sourceUuid,
+            'title' => trim($data['title']), 'text_snapshot' => $text, 'text_hash' => $hash,
+            'language' => $data['language'], 'voice' => $data['voice'], 'voice_gender' => $data['voice_gender'],
+            'vibe' => $data['vibe'], 'tempo_percent' => $data['tempo_percent'], 'style_prompt' => $stylePrompt,
+            'model' => $model, 'status' => 'queued', 'disk' => 'local', 'mime' => (config('ai.tts.output_format', 'mp3') === 'wav' ? 'audio/wav' : 'audio/mpeg'),
+        ]);
+        Audit::log('ai_teacher_audio_create', $asset, ['title' => $asset->title, 'characters' => mb_strlen($text), 'model' => $model]);
+        $dispatchMode = (string) config('ai.tts.dispatch', 'queue');
+        if ($dispatchMode === 'sync') {
+            $this->extendTtsExecutionTime();
+            GenerateTeacherAudioJob::dispatchSync($asset->uuid);
+        } elseif (in_array($dispatchMode, ['deferred', 'background'], true)) {
+            $this->extendTtsExecutionTime();
+            $asset->update(['status' => 'processing']);
+            GenerateTeacherAudioJob::dispatch($asset->uuid)->onConnection($dispatchMode);
+        } else {
+            GenerateTeacherAudioJob::dispatch($asset->uuid)
+                ->onConnection((string) config('ai.tts.queue_connection', 'tts'));
+        }
+        $asset->refresh();
+        return response()->json(['ok' => true, 'audio' => $this->audioPayload($asset)], $asset->isReady() ? 200 : 202);
+    }
+
+    public function audioTargets(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $map = function ($items, string $type) use ($user): array {
+            return $items->filter(fn ($item) => $item->classroom && $user->can('manage', $item->classroom))
+                ->unique(fn ($item) => $type.'|'.$item->classroom_id.'|'.mb_strtolower(trim((string) $item->title)))
+                ->map(fn ($item) => [
+                    'target_type' => $type,
+                    'target_uuid' => $item->uuid,
+                    'label' => $this->audioTargetLabel((string) $item->title, (string) $item->classroom->title),
+                ])
+                ->values()->all();
+        };
+        $targets = array_merge(
+            $map(ClassroomMaterial::with('classroom')->latest()->limit(80)->get(), 'classroom_material'),
+            $map(\App\Models\ClassroomAssignment::with('classroom')->latest()->limit(80)->get(), 'classroom_assignment'),
+            $map(\App\Models\GameQuiz::with('classroom')->latest()->limit(80)->get(), 'game_quiz'),
+        );
+        return response()->json(['ok' => true, 'targets' => $targets]);
+    }
+
+    public function audioHistory(Request $request): JsonResponse
+    {
+        $userUuid = $request->user()->uuid;
+        $this->markStaleTeacherAudioAsFailed($userUuid);
+
+        $audios = AiTeacherAudioAsset::query()
+            ->where('user_uuid', $userUuid)
+            ->latest()
+            ->limit(20)
+            ->get()
+            ->map(fn (AiTeacherAudioAsset $audio) => $this->audioPayload($audio))
+            ->values();
+
+        return response()->json(['ok' => true, 'audios' => $audios]);
+    }
+
+    public function audioShow(Request $request, AiTeacherAudioAsset $audio): JsonResponse
+    {
+        $this->authorize('view', $audio); return response()->json(['ok' => true, 'audio' => $this->audioPayload($audio->fresh())]);
+    }
+
+    public function audioStatus(Request $request, AiTeacherAudioAsset $audio): JsonResponse
+    {
+        $this->authorize('view', $audio);
+        $this->markStaleTeacherAudioAsFailed($audio->user_uuid);
+
+        return response()->json(['ok' => true, 'audio' => $this->audioPayload($audio->fresh())]);
+    }
+
+    public function audioStream(Request $request, AiTeacherAudioAsset $audio)
+    {
+        abort_unless($this->canAccessAudio($request->user(), $audio), 403);
+        abort_unless($audio->isReady() && \Storage::disk($audio->disk)->exists($audio->path), 404);
+        return response()->file(\Storage::disk($audio->disk)->path($audio->path), [
+            'Content-Type' => $audio->mime, 'Content-Disposition' => 'inline; filename="'.addslashes($audio->title).'.'.$this->audioExtension($audio).'"',
+            'Cache-Control' => 'private, no-store', 'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    public function audioDownload(Request $request, AiTeacherAudioAsset $audio)
+    {
+        abort_unless($this->canAccessAudio($request->user(), $audio), 403);
+        abort_unless($audio->isReady() && \Storage::disk($audio->disk)->exists($audio->path), 404);
+        return \Storage::disk($audio->disk)->download($audio->path, Str::slug($audio->title).'.'.$this->audioExtension($audio), ['Content-Type' => $audio->mime]);
+    }
+
+    public function audioDelete(Request $request, AiTeacherAudioAsset $audio): JsonResponse
+    {
+        $this->authorize('delete', $audio); if ($audio->path) \Storage::disk($audio->disk)->delete($audio->path); $audio->delete(); Audit::log('ai_teacher_audio_delete', $audio);
+        return response()->json(['ok' => true, 'message' => 'Audio dihapus.']);
+    }
+
+    public function audioAttach(Request $request, AiTeacherAudioAsset $audio): JsonResponse
+    {
+        $this->authorize('manage', $audio); abort_unless($audio->isReady(), 422, 'Audio belum selesai dibuat.');
+        $data = $request->validate(['target_type' => ['required', 'in:classroom_material,classroom_assignment,game_quiz'], 'target_uuid' => ['required', 'uuid']]);
+        $target = $this->audioTarget($data['target_type'], $data['target_uuid']);
+        $classroom = $target->classroom; $this->authorize('manage', $classroom);
+        $link = AiTeacherAudioLink::firstOrCreate(['audio_uuid' => $audio->uuid, 'target_type' => $data['target_type'], 'target_uuid' => $target->uuid], ['created_by' => $request->user()->uuid]);
+        Audit::log('ai_teacher_audio_attach', $audio, ['target_type' => $link->target_type, 'target_uuid' => $link->target_uuid]);
+        return response()->json(['ok' => true, 'link' => ['uuid' => $link->uuid, 'target_type' => $link->target_type, 'target_uuid' => $link->target_uuid]]);
+    }
+
+    public function audioDetach(Request $request, AiTeacherAudioAsset $audio, AiTeacherAudioLink $link): JsonResponse
+    {
+        $this->authorize('manage', $audio); abort_unless($link->audio_uuid === $audio->uuid, 404); $link->delete();
+        return response()->json(['ok' => true]);
+    }
+
+    private function audioTarget(string $type, string $uuid): Model
+    {
+        return match ($type) {
+            'classroom_material' => ClassroomMaterial::where('uuid', $uuid)->firstOrFail(),
+            'classroom_assignment' => \App\Models\ClassroomAssignment::where('uuid', $uuid)->firstOrFail(),
+            'game_quiz' => \App\Models\GameQuiz::where('uuid', $uuid)->firstOrFail(),
+            default => abort(422),
+        };
+    }
+
+    private function canAccessAudio(User $user, AiTeacherAudioAsset $audio): bool
+    {
+        if ($audio->user_uuid === $user->uuid) return true;
+        foreach ($audio->links as $link) {
+            try {
+                $target = $this->audioTarget($link->target_type, $link->target_uuid);
+                if ($target instanceof \App\Models\GameQuiz) { if ($user->can('view', $target)) return true; continue; }
+                foreach ($target->classrooms as $classroom) if ($user->can('view', $classroom)) return true;
+            } catch (\Throwable) { continue; }
+        }
+        return false;
+    }
+
+    private function markStaleTeacherAudioAsFailed(string $userUuid): void
+    {
+        AiTeacherAudioAsset::query()
+            ->where('user_uuid', $userUuid)
+            ->where('status', 'queued')
+            ->where('updated_at', '<', now()->subMinutes((int) config('ai.tts.queued_stale_minutes', 5)))
+            ->update([
+                'status' => 'failed',
+                'error_message' => 'Antrean audio tidak diproses. Worker queue tidak aktif. Jalankan ulang pembuatan audio setelah worker tersedia.',
+            ]);
+
+        AiTeacherAudioAsset::query()
+            ->where('user_uuid', $userUuid)
+            ->where('status', 'processing')
+            ->where('updated_at', '<', now()->subMinutes((int) config('ai.tts.stale_minutes', 35)))
+            ->update([
+                'status' => 'failed',
+                'error_message' => 'Proses audio sebelumnya terhenti. Silakan buat ulang audio.',
+            ]);
+    }
+
+    private function extendTtsExecutionTime(): void
+    {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(1900);
+        }
+    }
+
+    private function audioTargetLabel(string $targetTitle, string $classroomTitle): string
+    {
+        $targetParts = preg_split('/\s+[\x{2013}\x{2014}-]\s+/u', trim($targetTitle)) ?: [];
+        $classroomParts = preg_split('/\s+[\x{2013}\x{2014}-]\s+/u', trim($classroomTitle)) ?: [];
+
+        while ($targetParts !== [] && $classroomParts !== []
+            && mb_strtolower(trim((string) end($targetParts))) === mb_strtolower(trim((string) $classroomParts[0]))) {
+            array_shift($classroomParts);
+        }
+
+        return implode(' — ', array_values(array_filter([...$targetParts, ...$classroomParts])));
+    }
+
+    private function audioExtension(AiTeacherAudioAsset $audio): string
+    {
+        $pathExtension = mb_strtolower(pathinfo((string) $audio->path, PATHINFO_EXTENSION));
+        if (in_array($pathExtension, ['mp3', 'wav'], true)) {
+            return $pathExtension;
+        }
+
+        return in_array($audio->mime, ['audio/wav', 'audio/x-wav'], true) ? 'wav' : 'mp3';
+    }
+
+    private function audioPayload(AiTeacherAudioAsset $audio): array
+    {
+        $durationSeconds = max(0, (int) round(((int) $audio->duration_ms) / 1000));
+
+        return [
+            'uuid' => $audio->uuid,
+            'title' => $audio->title,
+            'status' => $audio->status,
+            'language' => $audio->language,
+            'language_label' => config('ai.tts.languages.'.$audio->language, $audio->language),
+            'voice' => $audio->voice,
+            'voice_gender' => $audio->voice_gender,
+            'vibe' => $audio->vibe,
+            'tempo_percent' => $audio->tempo_percent,
+            'duration_ms' => $audio->duration_ms,
+            'duration_label' => $audio->duration_ms ? sprintf('%d:%02d', intdiv($durationSeconds, 60), $durationSeconds % 60) : null,
+            'characters' => mb_strlen((string) $audio->text_snapshot),
+            'error_message' => $audio->error_message,
+            'created_at' => $audio->created_at?->toIso8601String(),
+            'created_at_label' => $audio->created_at?->format('d/m/Y H:i'),
+            'status_url' => route('ai.teacher.audio.status', $audio),
+            'stream_url' => $audio->isReady() ? route('ai.teacher.audio.stream', $audio) : null,
+            'download_url' => $audio->isReady() ? route('ai.teacher.audio.download', $audio) : null,
+            'delete_url' => route('ai.teacher.audio.destroy', $audio),
+        ];
+    }
+
+    /** GET /ai/teacher/quota — snapshot kuota live (dipoll UI). */
+    public function quota(Request $request): JsonResponse
+    {
+        $fresh = $request->boolean('fresh');
+        $userId = $request->user()?->uuid;
+
+        return response()->json([
+            'ok' => true,
+            'quota' => $this->aiPublicQuotaUsage($fresh, $userId),
+        ]);
+    }
+
+    /**
+     * POST /ai/teacher/ocr — foto buku (kamera HP) → teks via Gemini vision.
+     * Foto tidak disimpan permanen; hanya dikirim ke model lalu dibuang.
+     */
+    public function ocr(Request $request): JsonResponse
+    {
+        if ($blocked = $this->requireTeacherReady($request)) {
+            return $blocked;
+        }
+
+        $maxImages = max(1, (int) config('ai.ocr.max_images', 5));
+        $maxKb = max(256, (int) ceil(((int) config('ai.ocr.max_bytes', 4 * 1024 * 1024)) / 1024));
+
+        $request->validate([
+            'images' => ['required', 'array', 'min:1', 'max:'.$maxImages],
+            // image = cek isi biner (bukan hanya ekstensi); mimes membatasi format OCR.
+            'images.*' => ['required', 'file', 'image', 'mimes:jpeg,jpg,png,webp', 'max:'.$maxKb],
+            'scope' => ['nullable', 'in:quiz,learning'],
+            'title' => ['nullable', 'string', 'max:180'],
+        ], [
+            'images.required' => 'Unggah minimal satu foto halaman buku.',
+            'images.max' => "Maksimal {$maxImages} foto per sekali baca.",
+            'images.*.image' => 'File harus berupa gambar yang valid.',
+            'images.*.mimes' => 'Format foto harus JPEG, PNG, atau WebP.',
+            'images.*.max' => 'Setiap foto maksimal '.round($maxKb / 1024, 1).' MB. Kompres di HP lalu coba lagi.',
+        ]);
+
+        $user = $request->user();
+        $userId = $user->uuid;
+        $apiKey = $user->plainGeminiApiKey();
+
+        if ($limited = $this->aiRateLimited('teacher_ocr', $userId)) {
+            return $limited;
+        }
+
+        $prepared = [];
+        foreach ($request->file('images', []) as $file) {
+            $binary = $this->prepareOcrImageBinary($file->getRealPath(), $file->getMimeType() ?: 'image/jpeg');
+            if ($binary === null) {
+                continue;
+            }
+            $prepared[] = $binary;
+        }
+
+        if ($prepared === []) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Foto tidak bisa diproses. Ambil ulang dengan format JPEG/PNG.',
+            ], 422);
+        }
+
+        try {
+            $result = $this->gemini->visionText($prepared, [
+                'api_key' => $apiKey,
+                'timeout' => (int) config('ai.ocr.timeout', 60),
+                'max_output_tokens' => 4096,
+            ]);
+        } catch (RuntimeException $e) {
+            $this->logAiUsage($userId, 'teacher_ocr', config('ai.model'), 0, 0, 'error');
+
+            return response()->json([
+                'ok' => false,
+                'message' => $e->getMessage(),
+                'quota' => $this->aiPublicQuotaUsage(false, $userId),
+            ], 502);
+        }
+
+        $this->logAiUsage(
+            $userId,
+            'teacher_ocr',
+            $result['model'] ?? config('ai.model'),
+            $result['prompt_tokens'] ?? 0,
+            $result['completion_tokens'] ?? 0,
+            'success',
+        );
+
+        $text = trim((string) ($result['text'] ?? ''));
+        $upper = mb_strtoupper($text);
+        if ($text === '' || str_contains($upper, 'TIDAK_TERBACA')) {
+            return response()->json([
+                'ok' => false,
+                'code' => 'image_unreadable',
+                'message' => 'Teks tidak terbaca dari foto (mungkin buram atau gelap). Potret ulang halaman dengan cahaya cukup dan fokus tajam.',
+                'quota' => $this->aiPublicQuotaUsage(false, $userId),
+            ], 422);
+        }
+
+        $maxChars = max(4000, (int) config('ai.max_input_chars', 8000) * 2);
+        // Sisakan ruang untuk kop + stempel sumber (anti-plagiarisme).
+        $stampBudget = 900;
+        $bodyMax = max(2000, $maxChars - $stampBudget);
+        if (mb_strlen($text) > $bodyMax) {
+            $text = mb_substr($text, 0, $bodyMax);
+        }
+
+        $scope = $request->input('scope', 'quiz') === 'learning' ? 'learning' : 'quiz';
+        $pageCount = count($prepared);
+        $customTitle = trim((string) $request->input('title', ''));
+        $title = $customTitle !== ''
+            ? $customTitle
+            : ('Teks scan buku · '.now()->timezone(config('app.timezone', 'Asia/Jakarta'))->format('d/m/Y H:i')
+                .($pageCount > 1 ? " · {$pageCount} halaman" : ''));
+
+        // Kop sekolah + stempel sumber digital (trademark / pertanggungjawaban).
+        $text = SchoolLetterhead::ensureOcrAttribution($text, [
+            'pages' => $pageCount,
+        ]);
+
+        // Simpan ke History Generate agar bisa dipakai ulang (tanpa menyimpan file foto).
+        $history = $this->storeHistory($userId, [
+            'type' => 'ocr_scan',
+            'type_label' => 'Scan Buku',
+            'title' => $title,
+            'metadata' => [
+                'source' => 'camera_ocr',
+                'scope' => $scope,
+                'char_count' => mb_strlen($text),
+                'pages' => $pageCount,
+                'attribution' => 'school_letterhead+scan_stamp',
+                'via' => 'sims',
+            ],
+        ], $text);
+
+        return response()->json([
+            'ok' => true,
+            'text' => $text,
+            'char_count' => mb_strlen($text),
+            'history' => $history,
+            'quota' => $this->aiPublicQuotaUsage(false, $userId),
+        ]);
+    }
+
+    /** DELETE /ai/teacher/history/{history} - hapus satu item history milik guru sendiri. */
+    public function destroyHistory(AiTeacherHistory $history): JsonResponse
+    {
+        // History bersifat pribadi: guru lain (atau wali kelas) tak boleh menghapus milik orang.
+        abort_unless($history->user_uuid === auth()->id(), 403);
+
+        $history->delete();
+
+        return response()->json(['ok' => true]);
+    }
+
+    /** POST /ai/teacher/quiz - generator soal/kuis. */
+    public function quiz(Request $request): JsonResponse
+    {
+        $built = $this->composeQuiz($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        // Samakan dengan learning: multi-chunk auto-continue butuh wall-clock lebih longgar.
+        @set_time_limit($this->teacherExecutionTimeLimit());
+
+        $jumlah = (int) ($built['history']['metadata']['jumlah'] ?? 10);
+        $tingkat = (string) ($built['history']['metadata']['tingkat'] ?? 'sedang');
+        $soalBergambar = (bool) ($built['soal_bergambar'] ?? false);
+
+        if ($blocked = $this->requireTeacherReady($request)) {
+            return $blocked;
+        }
+
+        $user = $request->user();
+        $userId = $user->uuid;
+        $apiKey = $user->plainGeminiApiKey();
+
+        if ($limited = $this->aiRateLimited('teacher_quiz', $userId)) {
+            return $limited;
+        }
+
+        $maxOut = $this->quizMaxOutputTokens($jumlah, $tingkat);
+        $visionImages = $built['vision_images'] ?? [];
+
+        try {
+            // Foto buku: multimodal lewat key AI Studio pribadi guru (bukan OCR dulu).
+            if (is_array($visionImages) && $visionImages !== []) {
+                $result = $this->gemini->visionText($visionImages, $this->teacherGenerateOptions() + [
+                    'api_key' => $apiKey,
+                    'prompt' => $built['prompt'],
+                    'system' => trim($built['system']."\n\n".$built['answer_style']),
+                    'max_output_tokens' => $maxOut,
+                    'temperature' => 0.4,
+                    'timeout' => (int) config('ai.long_timeout'),
+                    'include_global_system_prompt' => $built['include_global_system_prompt'] ?? true,
+                ]);
+            } else {
+                $result = $this->gemini->generate($built['prompt'], $this->teacherGenerateOptions() + [
+                    'system' => $built['system'],
+                    'max_output_tokens' => $maxOut,
+                    'api_key' => $apiKey,
+                    'answer_style' => $built['answer_style'],
+                    'thinking_level' => 'low',
+                    'timeout' => (int) config('ai.long_timeout'),
+                    'include_global_system_prompt' => $built['include_global_system_prompt'] ?? true,
+                ]);
+            }
+        } catch (RuntimeException $e) {
+            $this->logAiUsage($userId, 'teacher_quiz', config('ai.model'), 0, 0, 'error');
+
+            return response()->json([
+                'ok' => false,
+                'message' => $e->getMessage(),
+                'quota' => $this->aiPublicQuotaUsage(),
+            ], 502);
+        }
+
+        $answer = SchoolLetterhead::ensurePrefix($result['text']);
+        $images = [];
+        $imageMeta = null;
+
+        if ($soalBergambar) {
+            @set_time_limit((int) config('ai.image.timeout', 90) * ((int) config('ai.image.max_per_quiz', 5) + 1));
+            $enriched = app(QuizImageEnricher::class)->enrich($answer, $apiKey, $userId);
+            $answer = SchoolLetterhead::ensurePrefix($enriched['text']);
+            $images = $enriched['images'];
+            $imageMeta = [
+                'generated' => $enriched['generated'],
+                'failed' => $enriched['failed'],
+                'max' => (int) config('ai.image.max_per_quiz', 5),
+            ];
+
+            if ($enriched['generated'] > 0) {
+                $this->logAiUsage(
+                    $userId,
+                    'teacher_quiz_image',
+                    $images[0]['model'] ?? (string) config('ai.image.model'),
+                    0,
+                    $enriched['generated'],
+                    'success',
+                );
+            }
+        }
+
+        $this->logAiGenerationUsage(
+            $userId,
+            'teacher_quiz',
+            $result,
+            'success',
+        );
+
+        $historyPayload = $built['history'];
+        if ($imageMeta !== null) {
+            $historyPayload['metadata']['images'] = $imageMeta;
+        }
+
+        $history = $this->storeHistory($userId, $historyPayload, $answer);
+
+        $payload = [
+            'ok' => true,
+            'answer' => $answer,
+            'history' => $history,
+            'quota' => $this->aiPublicQuotaUsage(),
+        ];
+
+        if (! empty($result['truncated'])) {
+            $payload['warning'] = 'Jawaban AI masih terpotong setelah dilanjutkan otomatis. Kurangi cakupan topik, jumlah soal, atau lampiran lalu coba lagi. Teks parsial tetap disimpan.';
+        }
+
+        if ($soalBergambar) {
+            $payload['images'] = $images;
+            $payload['image_meta'] = $imageMeta;
+            if (($imageMeta['generated'] ?? 0) === 0 && ($imageMeta['failed'] ?? 0) > 0) {
+                $imageWarning = 'Soal teks berhasil, tetapi generate gambar gagal. Penanda [GAMBAR: ...] tetap di dokumen agar bisa dilampirkan manual.';
+                $payload['warning'] = isset($payload['warning'])
+                    ? $payload['warning'].' '.$imageWarning
+                    : $imageWarning;
+            } elseif (($imageMeta['generated'] ?? 0) > 0 && ($imageMeta['failed'] ?? 0) > 0) {
+                $imageWarning = "Berhasil membuat {$imageMeta['generated']} gambar; {$imageMeta['failed']} gagal.";
+                $payload['warning'] = isset($payload['warning'])
+                    ? $payload['warning'].' '.$imageWarning
+                    : $imageWarning;
+            }
+        }
+
+        return response()->json($payload);
+    }
+
+    /** POST /ai/teacher/blueprint - generator kisi-kisi asesmen. */
+    public function blueprint(Request $request): JsonResponse
+    {
+        $built = $this->composeBlueprint($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        return $this->respond(
+            $request,
+            'teacher_blueprint',
+            $built['system'],
+            $built['prompt'],
+            $this->teacherMaxOutputTokens(),
+            [
+                'answer_style' => $built['answer_style'],
+                'thinking_level' => 'low',
+                'timeout' => (int) config('ai.long_timeout'),
+            ],
+            $built['history'],
+        );
+    }
+
+    /**
+     * Estimasi jatah keluaran generator soal.
+     * Tingkat sulit + banyak nomor mudah kena finishReason MAX_TOKENS di 4096
+     * (terutama model yang memakai thinking tokens di dalam maxOutputTokens).
+     */
+    private function quizMaxOutputTokens(int $jumlah, string $tingkat): int
+    {
+        $perItem = match ($tingkat) {
+            'sulit' => 480,
+            'sedang' => 340,
+            default => 260,
+        };
+
+        return min($this->teacherMaxOutputTokens(), max(4096, ($jumlah * $perItem) + 1600));
+    }
+
+    /** Opsi generate untuk dokumen panjang Asisten Guru (RPM, soal). */
+    private function teacherGenerateOptions(): array
+    {
+        return [
+            'auto_continue_on_max_tokens' => (bool) config('ai.teacher.auto_continue_on_max_tokens', true),
+            'max_continuations' => (int) config('ai.teacher.max_continuations', 2),
+        ];
+    }
+
+    private function teacherMaxOutputTokens(int $fallback = 8192): int
+    {
+        return max(1024, (int) config('ai.teacher.max_output_tokens', $fallback));
+    }
+
+    /** Batas waktu PHP untuk generate dokumen panjang + auto-lanjut. */
+    private function teacherExecutionTimeLimit(): int
+    {
+        $longTimeout = (int) config('ai.long_timeout');
+        $maxCalls = 1 + max(0, (int) config('ai.teacher.max_continuations', 2));
+
+        return ($longTimeout * $maxCalls) + 60;
+    }
+
+    /**
+     * POST /ai/teacher/quiz/preview - render hasil soal jadi dokumen berformat.
+     * Memakai parser + markup yang sama dengan export Word, jadi yang dilihat guru
+     * = yang tercetak. Murni parsing lokal (tanpa panggil AI), maka tak kena rate limit.
+     */
+    public function previewQuiz(Request $request): JsonResponse
+    {
+        $data = $this->validatedQuizExport($request);
+        $content = SchoolLetterhead::ensurePrefix($data['content']);
+        $interactiveQuality = (bool) ($data['interactive_quality'] ?? false);
+        if (BlueprintDocument::looksLike($content)) {
+            $doc = BlueprintDocument::parse($content);
+
+            return response()->json([
+                'ok' => true,
+                'parsed' => $doc['parsed'],
+                'quality_questions' => $interactiveQuality ? $this->qualityQuestionsFromImportableQuiz($content) : [],
+                'html' => view('ai.teacher-blueprint-preview', [
+                    'doc' => $doc,
+                    'content' => $doc['text'],
+                ])->render(),
+            ]);
+        }
+
+        $doc = QuizDocument::parse($content);
+
+        return response()->json([
+            'ok' => true,
+            'parsed' => $doc['parsed'],
+            'quality_questions' => $interactiveQuality ? $this->qualityQuestionsFromImportableQuiz($content) : [],
+            'html' => view('ai.teacher-quiz-preview', [
+                'doc' => $doc,
+                'content' => $doc['text'],
+                'interactiveQuality' => $interactiveQuality,
+            ])->render(),
+        ]);
+    }
+
+    /** @return list<array{question_text:string,question_type:string,options:list<string>,answer_key:string}> */
+    private function qualityQuestionsFromImportableQuiz(string $content): array
+    {
+        $questions = app(GameQuizImporter::class)->parse($content);
+
+        return array_values(array_map(function (array $question): array {
+            $options = array_values((array) ($question['options'] ?? []));
+            $letters = range('A', 'J');
+            $correctLetters = [];
+            $optionTexts = [];
+
+            foreach ($options as $index => $option) {
+                $optionTexts[] = (string) ($option['option_text'] ?? '');
+                if ((bool) ($option['is_correct'] ?? false)) {
+                    $correctLetters[] = $letters[$index] ?? (string) ($index + 1);
+                }
+            }
+
+            $answerKey = implode(', ', $correctLetters);
+            $type = (string) ($question['type'] ?? 'mcq');
+            if ($type === 'true_false') {
+                foreach ($options as $option) {
+                    if ((bool) ($option['is_correct'] ?? false)) {
+                        $answerKey = (string) ($option['option_text'] ?? $answerKey);
+                        break;
+                    }
+                }
+            } elseif ($type === 'short_answer') {
+                $answerKey = implode(', ', array_filter((array) ($question['meta']['answers'] ?? [])));
+            } elseif ($type === 'match') {
+                $pairs = array_values((array) ($question['meta']['pairs'] ?? []));
+                $pairLines = array_values(array_filter(array_map(
+                    fn ($pair) => trim((string) ($pair['left'] ?? '')).' -> '.trim((string) ($pair['right'] ?? '')),
+                    $pairs,
+                ), fn (string $line) => $line !== ' -> '));
+                $optionTexts = $pairLines;
+                $answerKey = implode('; ', $pairLines);
+            }
+
+            return [
+                'question_text' => (string) ($question['question_text'] ?? ''),
+                'question_type' => $type,
+                'options' => array_values(array_filter($optionTexts, fn (string $option) => $option !== '')),
+                'answer_key' => $answerKey,
+            ];
+        }, $questions));
+    }
+
+    /** POST /ai/teacher/quiz/export-word - export hasil soal yang sudah bisa diedit guru. */
+    public function exportQuizWord(Request $request)
+    {
+        $data = $this->validatedQuizExport($request);
+
+        $title = trim((string) ($data['title'] ?? '')) ?: 'Soal dari Asisten Guru';
+        $safeName = Str::slug($title) ?: 'soal-asisten-ai';
+        $fileName = $safeName.'-'.now()->format('Ymd-His').'.docx';
+        $path = tempnam(sys_get_temp_dir(), 'ai-quiz-word-');
+
+        if (! $path) {
+            abort(500, 'Gagal membuat file Word.');
+        }
+
+        // Dokumen berformat dirender dengan builder yang sesuai; selain itu paragraf polos.
+        $content = SchoolLetterhead::ensurePrefix($data['content']);
+        if (BlueprintDocument::looksLike($content)) {
+            $doc = BlueprintDocument::parse($content);
+            $written = $doc['parsed']
+                ? BlueprintDocxBuilder::write($path, $doc)
+                : $this->writeDocx($path, $title, $doc['text'], false, false);
+        } else {
+            $doc = QuizDocument::parse($content);
+            $written = $doc['parsed']
+                ? QuizDocxBuilder::write($path, $doc)
+                : $this->writeDocx($path, $title, $doc['text'], false, false);
+        }
+
+        if (! $written) {
+            abort(500, 'Gagal membuat file Word.');
+        }
+
+        return $this->attachmentDownload($path, $fileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+
+    /** POST /ai/teacher/quiz/export-pdf - export hasil soal ke PDF siap cetak. */
+    public function exportQuizPdf(Request $request)
+    {
+        $data = $this->validatedQuizExport($request);
+
+        $title = trim((string) ($data['title'] ?? '')) ?: 'Soal dari Asisten Guru';
+        $fileName = (Str::slug($title) ?: 'soal-asisten-ai').'-'.now()->format('Ymd-His').'.pdf';
+
+        // Konten berformat dirender lewat partial yang sama dengan pratinjau & Word;
+        // konten bebas jatuh ke render teks polos.
+        $content = SchoolLetterhead::ensurePrefix($data['content']);
+        if (BlueprintDocument::looksLike($content)) {
+            $doc = BlueprintDocument::parse($content);
+            $pdf = Pdf::loadView('ai.teacher-blueprint-pdf', [
+                'title' => $title,
+                'content' => $doc['text'],
+                'doc' => $doc,
+            ])->setPaper('a4', 'landscape');
+
+            return $pdf->download($fileName)->withHeaders($this->attachmentHeaders(
+                $fileName,
+                'application/pdf'
+            ));
+        }
+
+        $doc = QuizDocument::parse($content);
+
+        $pdf = Pdf::loadView('ai.teacher-quiz-pdf', [
+            'title' => $title,
+            'content' => $doc['text'],
+            'doc' => $doc,
+        ])->setPaper('a4', 'portrait');
+
+        // Stream PDF dengan header attachment — andal di browser mobile & WebView DownloadManager.
+        return $pdf->download($fileName)->withHeaders($this->attachmentHeaders(
+            $fileName,
+            'application/pdf'
+        ));
+    }
+
+    /** POST /ai/teacher/tpatp — generator Tujuan Pembelajaran (TP) & Alur Tujuan Pembelajaran (ATP). */
+    public function tpatp(Request $request): JsonResponse
+    {
+        $built = $this->composeTpAtp($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        @set_time_limit($this->teacherExecutionTimeLimit());
+
+        return $this->respond(
+            $request,
+            'teacher_tpatp',
+            $built['system'],
+            $built['prompt'],
+            $this->teacherMaxOutputTokens(),
+            $this->teacherGenerateOptions() + [
+                'thinking_level' => 'low',
+                'timeout' => (int) config('ai.long_timeout'),
+                'retries' => 1,
+                'answer_style' => $built['answer_style'],
+            ],
+            $built['history'],
+        );
+    }
+
+    /** POST /ai/teacher/tpatp/preview — render hasil jadi dokumen TP dan ATP berformat. */
+    public function previewTpAtp(Request $request): JsonResponse
+    {
+        $data = $this->validatedTpAtpExport($request);
+        $doc = TpAtpDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+
+        return response()->json([
+            'ok' => true,
+            'parsed' => $doc['parsed'],
+            'html' => view('ai.teacher-tpatp-preview', [
+                'doc' => $doc,
+                'content' => $doc['text'],
+                'kopLogoKiri' => SchoolLetterhead::logoKiriUrl(),
+                'kopLogoKanan' => SchoolLetterhead::logoKananUrl(),
+                'kopTeksHtml' => SchoolLetterhead::kopTeksHtml(),
+                'kop' => SchoolLetterhead::lines(),
+            ])->render(),
+        ]);
+    }
+
+    /** POST /ai/teacher/tpatp/export-word — unduh dokumen Word (.docx) formal ber-border rapat. */
+    public function exportTpAtpWord(Request $request)
+    {
+        $data = $this->validatedTpAtpExport($request);
+        $title = $this->tpAtpExportTitle($data);
+        $fileName = (Str::slug($title) ?: 'tp-atp-kurikulum-merdeka').'-'.now()->format('Ymd-His').'.docx';
+        $path = tempnam(sys_get_temp_dir(), 'ai-tpatp-word-');
+
+        if (! $path) {
+            abort(500, 'Gagal membuat file Word.');
+        }
+
+        $doc = TpAtpDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+
+        try {
+            $written = TpAtpDocxBuilder::write($path, $doc);
+            if (! $written) {
+                abort(500, 'Gagal menulis dokumen Word TP dan ATP.');
+            }
+        } catch (\Throwable $e) {
+            @unlink($path);
+            abort(500, 'Gagal menyusun dokumen Word TP dan ATP: '.$e->getMessage());
+        }
+
+        return $this->attachmentDownload($path, $fileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+
+    /** POST /ai/teacher/tpatp/export-pdf — unduh dokumen PDF landscape identik format acuan. */
+    public function exportTpAtpPdf(Request $request)
+    {
+        $data = $this->validatedTpAtpExport($request);
+        $title = $this->tpAtpExportTitle($data);
+        $fileName = (Str::slug($title) ?: 'tp-atp-kurikulum-merdeka').'-'.now()->format('Ymd-His').'.pdf';
+
+        $doc = TpAtpDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+
+        $pdf = Pdf::loadView('ai.teacher-tpatp-pdf', [
+            'title' => $title,
+            'content' => $doc['text'],
+            'doc' => $doc,
+            'isPdf' => true,
+            'kopLogoKiri' => SchoolLetterhead::logoKiriDataUri(),
+            'kopLogoKanan' => SchoolLetterhead::logoKananDataUri(),
+            'kopTeksHtml' => SchoolLetterhead::kopTeksHtml(),
+            'kop' => SchoolLetterhead::lines(),
+        ])->setPaper('a4', 'landscape');
+
+        return $pdf->download($fileName)->withHeaders($this->attachmentHeaders(
+            $fileName,
+            'application/pdf'
+        ));
+    }
+
+    private function validatedTpAtpExport(Request $request): array
+    {
+        if (! $request->has('content') && $request->has('text')) {
+            $request->merge(['content' => $request->input('text')]);
+        }
+
+        return $request->validate([
+            'title' => ['nullable', 'string', 'max:150'],
+            'content' => ['required', 'string', 'max:120000'],
+        ]);
+    }
+
+    private function tpAtpExportTitle(array $data): string
+    {
+        $title = trim((string) ($data['title'] ?? ''));
+
+        return $title !== '' ? $title : 'TP & ATP Kurikulum Merdeka';
+    }
+
+    /** POST /ai/teacher/prosem-prota/generate — susun Program Semester (PROSEM) & Program Tahunan (PROTA). */
+    public function generateProsemProta(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'source_uuid' => ['nullable', 'string'],
+            'content' => ['nullable', 'string', 'max:120000'],
+            'kelas' => ['nullable', 'string', 'max:10'],
+            'semester' => ['nullable', 'string', 'in:ganjil,genap,both'],
+            'jp_per_week' => ['nullable', 'integer', 'min:1', 'max:10'],
+            'sumatif_jp' => ['nullable', 'integer', 'min:1', 'max:10'],
+            'cadangan_jp_sem1' => ['nullable', 'integer', 'min:0', 'max:20'],
+            'cadangan_jp_sem2' => ['nullable', 'integer', 'min:0', 'max:20'],
+            'calendar_events_ganjil' => ['nullable', 'array'],
+            'calendar_events_genap' => ['nullable', 'array'],
+        ]);
+
+        $content = '';
+        if (! empty($data['source_uuid'])) {
+            $history = AiTeacherHistory::query()
+                ->where('uuid', $data['source_uuid'])
+                ->where('user_uuid', auth()->id())
+                ->first();
+            if ($history) {
+                $content = $history->answer;
+            }
+        }
+
+        if (empty($content) && ! empty($data['content'])) {
+            $content = $data['content'];
+        }
+
+        if (empty($content)) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Pilih salah satu hasil TP & ATP yang sudah jadi atau masukkan teks dokumen TP & ATP terlebih dahulu.',
+            ], 422);
+        }
+
+        $options = [
+            'kelas' => $data['kelas'] ?? '',
+            'semester' => $data['semester'] ?? 'both',
+            'jp_per_week' => $data['jp_per_week'] ?? 3,
+            'sumatif_jp' => $data['sumatif_jp'] ?? 2,
+            'cadangan_jp_sem1' => $data['cadangan_jp_sem1'] ?? 0,
+            'cadangan_jp_sem2' => $data['cadangan_jp_sem2'] ?? 3,
+            'calendar_events_ganjil' => $data['calendar_events_ganjil'] ?? null,
+            'calendar_events_genap' => $data['calendar_events_genap'] ?? null,
+            'signature' => ProsemProtaDocument::resolveSignature(),
+        ];
+
+        $built = ProsemProtaDocument::buildFromTpAtp($content, $options);
+
+        if (! $built['is_valid']) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Dokumen TP & ATP tidak memiliki data tujuan pembelajaran atau materi pokok yang dapat disusun menjadi Prosem dan Prota.',
+            ], 422);
+        }
+
+        $title = "Prosem & Prota {$built['meta']['mapel']} Kelas {$built['meta']['kelas']}";
+
+        $history = $this->storeHistory(auth()->id(), [
+            'type' => 'prosem_prota',
+            'type_label' => 'Prosem & Prota',
+            'title' => $title,
+            'metadata' => [
+                'kelas' => $built['meta']['kelas'],
+                'mapel' => $built['meta']['mapel'],
+                'tahun' => $built['meta']['tahun'],
+                'source_uuid' => $data['source_uuid'] ?? null,
+                'options' => $options,
+                'doc' => $built,
+            ],
+        ], $built['text']);
+
+        return response()->json([
+            'ok' => true,
+            'answer' => $built['text'],
+            'doc' => $built,
+            'history' => $history,
+            'html' => view('ai.teacher-prosem-prota-preview', [
+                'doc' => $built,
+            ])->render(),
+        ]);
+    }
+
+    /** POST /ai/teacher/prosem-prota/preview — render pratinjau Prosem dan Prota berformat. */
+    public function previewProsemProta(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'content' => ['nullable', 'string', 'max:120000'],
+            'source_uuid' => ['nullable', 'string'],
+            'kelas' => ['nullable', 'string', 'max:10'],
+            'jp_per_week' => ['nullable', 'integer', 'min:1', 'max:10'],
+            'sumatif_jp' => ['nullable', 'integer', 'min:1', 'max:10'],
+            'cadangan_jp_sem1' => ['nullable', 'integer', 'min:0', 'max:20'],
+            'cadangan_jp_sem2' => ['nullable', 'integer', 'min:0', 'max:20'],
+            'calendar_events_ganjil' => ['nullable', 'array'],
+            'calendar_events_genap' => ['nullable', 'array'],
+        ]);
+
+        $content = '';
+        if (! empty($data['source_uuid'])) {
+            $history = AiTeacherHistory::query()
+                ->where('uuid', $data['source_uuid'])
+                ->where('user_uuid', auth()->id())
+                ->first();
+            if ($history) {
+                $content = $history->answer;
+                // Jika tidak dikirim event kalender kustom di request, wariskan dari opsi tersimpan di history
+                if (empty($data['calendar_events_ganjil']) && ! empty($history->metadata['options']['calendar_events_ganjil'])) {
+                    $data['calendar_events_ganjil'] = $history->metadata['options']['calendar_events_ganjil'];
+                }
+                if (empty($data['calendar_events_genap']) && ! empty($history->metadata['options']['calendar_events_genap'])) {
+                    $data['calendar_events_genap'] = $history->metadata['options']['calendar_events_genap'];
+                }
+            }
+        }
+        if (empty($content) && ! empty($data['content'])) {
+            $content = $data['content'];
+        }
+
+        if (empty($content)) {
+            return response()->json(['ok' => false, 'message' => 'Konten dokumen kosong.'], 422);
+        }
+
+        if (empty($data['signature'])) {
+            $data['signature'] = ProsemProtaDocument::resolveSignature();
+        }
+
+        $doc = ProsemProtaDocument::buildFromTpAtp($content, $data);
+
+        return response()->json([
+            'ok' => true,
+            'html' => view('ai.teacher-prosem-prota-preview', [
+                'doc' => $doc,
+            ])->render(),
+            'doc' => $doc,
+        ]);
+    }
+
+    /** POST /ai/teacher/prosem-prota/export-word — unduh dokumen Word (.docx) PROTA atau PROSEM. */
+    public function exportProsemProtaWord(Request $request)
+    {
+        $data = $request->validate([
+            'content' => ['required', 'string', 'max:120000'],
+            'type' => ['nullable', 'string', 'in:both,prota,prosem,prosem_ganjil,prosem_genap'],
+            'title' => ['nullable', 'string', 'max:180'],
+            'kelas' => ['nullable', 'string', 'max:10'],
+            'jp_per_week' => ['nullable', 'integer'],
+            'sumatif_jp' => ['nullable', 'integer'],
+            'cadangan_jp_sem1' => ['nullable', 'integer'],
+            'cadangan_jp_sem2' => ['nullable', 'integer'],
+            'calendar_events_ganjil' => ['nullable', 'array'],
+            'calendar_events_genap' => ['nullable', 'array'],
+        ]);
+
+        $type = $data['type'] ?? 'both';
+        if (empty($data['signature'])) {
+            $data['signature'] = ProsemProtaDocument::resolveSignature();
+        }
+        $doc = ProsemProtaDocument::buildFromTpAtp($data['content'], $data);
+        $title = $data['title'] ?? "prosem-prota-{$doc['meta']['mapel']}-kelas-{$doc['meta']['kelas']}";
+        $fileName = (Str::slug($title) ?: 'prosem-prota').'-'.now()->format('Ymd-His').'.docx';
+        $path = tempnam(sys_get_temp_dir(), 'ai-prosem-word-');
+
+        if (! $path) {
+            abort(500, 'Gagal membuat file sementara.');
+        }
+
+        try {
+            $written = ProsemProtaDocxBuilder::write($path, $doc, $type);
+            if (! $written) {
+                abort(500, 'Gagal menulis dokumen Word Prosem & Prota.');
+            }
+        } catch (\Throwable $e) {
+            @unlink($path);
+            throw $e;
+        }
+
+        return $this->attachmentDownload($path, $fileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+
+    /** POST /ai/teacher/prosem-prota/export-pdf — unduh dokumen PDF landscape PROTA atau PROSEM. */
+    public function exportProsemProtaPdf(Request $request)
+    {
+        $data = $request->validate([
+            'content' => ['required', 'string', 'max:120000'],
+            'doc_type' => ['nullable', 'string', 'in:prota,prosem_ganjil,prosem_genap,prosem'],
+            'title' => ['nullable', 'string', 'max:180'],
+            'kelas' => ['nullable', 'string', 'max:10'],
+            'jp_per_week' => ['nullable', 'integer'],
+            'sumatif_jp' => ['nullable', 'integer'],
+            'cadangan_jp_sem1' => ['nullable', 'integer'],
+            'cadangan_jp_sem2' => ['nullable', 'integer'],
+            'calendar_events_ganjil' => ['nullable', 'array'],
+            'calendar_events_genap' => ['nullable', 'array'],
+        ]);
+
+        $docType = $data['doc_type'] ?? 'prota';
+        if (empty($data['signature'])) {
+            $data['signature'] = ProsemProtaDocument::resolveSignature();
+        }
+        $doc = ProsemProtaDocument::buildFromTpAtp($data['content'], $data);
+        $title = $data['title'] ?? "Prosem Prota {$doc['meta']['mapel']} Kelas {$doc['meta']['kelas']}";
+        $fileName = (Str::slug($title) ?: 'prosem-prota').'-'.now()->format('Ymd-His').'.pdf';
+
+        if ($docType === 'prota') {
+            $pdf = Pdf::loadView('ai.teacher-prota-pdf', [
+                'title' => $title,
+                'prota' => $doc['prota'],
+                'doc' => $doc,
+            ])->setPaper('a4', 'landscape');
+        } elseif ($docType === 'prosem_genap') {
+            $pdf = Pdf::loadView('ai.teacher-prosem-pdf', [
+                'title' => $title.' (Semester Genap)',
+                'prosem' => $doc['prosem']['genap'],
+                'doc' => $doc,
+            ])->setPaper('a4', 'landscape');
+        } else {
+            // prosem_ganjil atau default prosem
+            $pdf = Pdf::loadView('ai.teacher-prosem-pdf', [
+                'title' => $title.' (Semester Ganjil)',
+                'prosem' => $doc['prosem']['ganjil'],
+                'doc' => $doc,
+            ])->setPaper('a4', 'landscape');
+        }
+
+        return $pdf->download($fileName)->withHeaders($this->attachmentHeaders(
+            $fileName,
+            'application/pdf'
+        ));
+    }
+
+    /** POST /ai/teacher/learning - generator RPM Learning. */
+    public function learning(Request $request): JsonResponse
+    {
+        $built = $this->composeLearning($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        // Dokumen RPM utuh (+3 lampiran) butuh ~3.500 token dan ~45 detik.
+        @set_time_limit($this->teacherExecutionTimeLimit());
+
+        $visionImages = $built['vision_images'] ?? [];
+        if (is_array($visionImages) && $visionImages !== []) {
+            if ($blocked = $this->requireTeacherReady($request)) {
+                return $blocked;
+            }
+
+            $user = $request->user();
+            $userId = $user->uuid;
+            $apiKey = $user->plainGeminiApiKey();
+            $action = 'teacher_learning_'.$built['learning_tool'];
+
+            if ($limited = $this->aiRateLimited($action, $userId)) {
+                return $limited;
+            }
+
+            try {
+                $result = $this->gemini->visionText($visionImages, $this->teacherGenerateOptions() + [
+                    'api_key' => $apiKey,
+                    'prompt' => $built['prompt'],
+                    'system' => trim($built['system']."\n\n".$built['answer_style']),
+                    'max_output_tokens' => $this->teacherMaxOutputTokens(),
+                    'temperature' => 0.35,
+                    'timeout' => (int) config('ai.long_timeout'),
+                    'include_global_system_prompt' => $built['include_global_system_prompt'] ?? true,
+                ]);
+            } catch (RuntimeException $e) {
+                $this->logAiUsage($userId, $action, config('ai.model'), 0, 0, 'error');
+
+                return response()->json([
+                    'ok' => false,
+                    'message' => $e->getMessage(),
+                    'quota' => $this->aiPublicQuotaUsage(),
+                ], 502);
+            }
+
+            $answer = SchoolLetterhead::ensurePrefix($result['text']);
+            $this->logAiGenerationUsage(
+                $userId,
+                $action,
+                $result,
+                'success',
+            );
+            $history = $this->storeHistory($userId, $built['history'], $answer);
+
+            $payload = [
+                'ok' => true,
+                'answer' => $answer,
+                'history' => $history,
+                'quota' => $this->aiPublicQuotaUsage(),
+            ];
+            if (! empty($result['truncated'])) {
+                $payload['warning'] = 'Jawaban AI masih terpotong setelah dilanjutkan otomatis. Kurangi cakupan topik atau lampiran lalu coba lagi. Teks parsial tetap disimpan.';
+            }
+
+            return response()->json($payload);
+        }
+
+        return $this->respond(
+            $request,
+            'teacher_learning_'.$built['learning_tool'],
+            $built['system'],
+            $built['prompt'],
+            $this->teacherMaxOutputTokens(),
+            $this->teacherGenerateOptions() + [
+                'thinking_level' => 'low',
+                'timeout' => (int) config('ai.long_timeout'),
+                'retries' => 1,
+                'answer_style' => $built['answer_style'],
+                'include_global_system_prompt' => $built['include_global_system_prompt'] ?? true,
+            ],
+            $built['history'],
+        );
+    }
+
+    /**
+     * POST /ai/teacher/learning/preview - render hasil jadi dokumen RPM berformat tabel.
+     * Memakai partial yang sama dengan export PDF, jadi yang dilihat guru = yang tercetak.
+     * Murni parsing lokal (tanpa panggil AI), maka tak kena rate limit/audit.
+     */
+    public function previewLearning(Request $request): JsonResponse
+    {
+        $data = $this->validatedLearningExport($request);
+        $doc = LearningDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+
+        return response()->json([
+            'ok' => true,
+            'parsed' => $doc['parsed'],
+            'html' => view('ai.teacher-document-preview', [
+                'doc' => $doc,
+                'content' => $doc['text'],
+            ])->render(),
+        ]);
+    }
+
+    /** POST /ai/teacher/learning/export-word - export hasil RPM Learning ke Word. */
+    public function exportLearningWord(Request $request)
+    {
+        $data = $this->validatedLearningExport($request);
+        $title = $this->learningExportTitle($data);
+        $fileName = ($this->safeFileBase($title) ?: 'perangkat-ajar-learning').'-'.now()->format('Ymd-His').'.docx';
+        $path = tempnam(sys_get_temp_dir(), 'ai-learning-word-');
+
+        if (! $path) {
+            abort(500, 'Gagal membuat file Word.');
+        }
+
+        // Konten berformat RPM dirender sebagai tabel Word formal; selain itu paragraf polos.
+        $doc = LearningDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+        $written = $doc['parsed']
+            ? LearningDocxBuilder::write($path, $doc)
+            : $this->writeDocx($path, $title, $doc['text'], false, false);
+
+        if (! $written) {
+            abort(500, 'Gagal membuat file Word.');
+        }
+
+        return $this->attachmentDownload($path, $fileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
+
+    /** POST /ai/teacher/learning/export-pdf - export hasil RPM Learning ke PDF. */
+    public function exportLearningPdf(Request $request)
+    {
+        $data = $this->validatedLearningExport($request);
+        $title = $this->learningExportTitle($data);
+        $fileName = ($this->safeFileBase($title) ?: 'perangkat-ajar-learning').'-'.now()->format('Ymd-His').'.pdf';
+
+        $doc = LearningDocument::parse(SchoolLetterhead::ensurePrefix($data['content']));
+
+        $pdf = Pdf::loadView('ai.teacher-document-pdf', [
+            'title' => $title,
+            'content' => $doc['text'],
+            'doc' => $doc,
+        ])->setPaper('a4', 'portrait');
+
+        return $pdf->download($fileName)->withHeaders($this->attachmentHeaders(
+            $fileName,
+            'application/pdf'
+        ));
+    }
+
+    /**
+     * Unduhan file attachment yang andal di Chrome mobile & Android WebView (DownloadManager).
+     * Header eksplisit Content-Disposition: attachment memicu setDownloadListener di APK.
+     */
+    private function attachmentDownload(string $path, string $fileName, string $contentType)
+    {
+        return response()->download($path, $fileName, $this->attachmentHeaders($fileName, $contentType))
+            ->deleteFileAfterSend(true);
+    }
+
+    /** @return array<string, string> */
+    private function attachmentHeaders(string $fileName, string $contentType): array
+    {
+        $ascii = preg_replace('/[^A-Za-z0-9._-]+/', '-', $fileName) ?: 'dokumen.bin';
+        $utf8 = rawurlencode($fileName);
+
+        return [
+            'Content-Type' => $contentType,
+            'Content-Disposition' => 'attachment; filename="'.$ascii.'"; filename*=UTF-8\'\''.$utf8,
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store, no-cache, must-revalidate',
+            // Bantu beberapa WebView mengenali unduhan (bukan navigasi HTML).
+            'Content-Transfer-Encoding' => 'binary',
+        ];
+    }
+
+    /** POST /ai/teacher/summary - perangkum materi. */
+    public function summary(Request $request): JsonResponse
+    {
+        $built = $this->composeSummary($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        return $this->respond(
+            $request,
+            'teacher_summary',
+            $built['system'],
+            $built['prompt'],
+            2048,
+            ['answer_style' => $built['answer_style'] ?? null, 'thinking_level' => 'low'],
+            $built['history'],
+        );
+    }
+
+    /** POST /ai/teacher/feedback - Catatan Siswa (draf komentar hangat untuk siswa). */
+    public function feedback(Request $request): JsonResponse
+    {
+        $built = $this->composeFeedback($request);
+        if ($built instanceof JsonResponse) {
+            return $built;
+        }
+
+        return $this->respond(
+            $request,
+            'teacher_feedback',
+            $built['system'],
+            $built['prompt'],
+            2048,
+            ['answer_style' => $built['answer_style'] ?? null, 'thinking_level' => 'low'],
+            $built['history'],
+        );
+    }
+
+    /**
+     * @return array{system:string,prompt:string,answer_style:string,history:array,title:string}|JsonResponse
+     */
+    private function composeQuiz(Request $request): array|JsonResponse
+    {
+        if (! $request->has('jenis_soal') && $request->filled('jenis')) {
+            $legacyJenis = (string) $request->input('jenis');
+            $request->merge([
+                'jenis_soal' => self::LEGACY_QUIZ_TYPES[$legacyJenis] ?? [$legacyJenis],
+            ]);
+        }
+
+        $allowedQuizTypes = implode(',', array_keys(self::QUIZ_TYPES));
+        $maxMaterial = max(4000, (int) config('ai.max_input_chars', 8000) * 2);
+        $data = $request->validate([
+            // Topik kini SELALU wajib: dengan RAG, topik adalah kunci pencarian yang
+            // menentukan bagian buku mana yang dipakai. Tanpa topik tidak ada yang
+            // bisa dicari, dan kita kembali ke menebak dari halaman awal.
+            'topik' => ['required', 'string', 'max:500'],
+            'jumlah' => ['required', 'integer', 'min:1', 'max:20'],
+            'jenis_soal' => ['required', 'array', 'min:1', 'max:5'],
+            'jenis_soal.*' => ['required', 'string', 'distinct', 'in:'.$allowedQuizTypes],
+            'tingkat' => ['required', 'in:mudah,sedang,sulit'],
+            'jenjang' => ['nullable', 'string', 'max:100'],
+            'learning_objective' => ['nullable', 'string', 'max:1500'],
+            'file' => ['nullable', 'file', 'mimes:pdf,doc,docx', 'max:10240'],
+            'document_uuid' => ['nullable', 'string', 'max:64'],
+            'material_text' => ['nullable', 'string', 'max:'.$maxMaterial],
+            'soal_bergambar' => ['sometimes', 'boolean'],
+            'output_language' => TeacherOutputLanguage::validationRules(),
+            'include_pinyin' => ['sometimes', 'boolean'],
+        ]);
+        $data['jenis_soal'] = array_values(array_unique($data['jenis_soal']));
+        $data['soal_bergambar'] = $request->boolean('soal_bergambar');
+        $outputLanguage = TeacherOutputLanguage::normalize($data['output_language'] ?? null);
+        $includePinyin = $request->boolean('include_pinyin') && $outputLanguage === 'zh-CN';
+        $langLine = TeacherOutputLanguage::promptLine($outputLanguage);
+        if ($pinyinLine = TeacherOutputLanguage::pinyinLine($includePinyin)) {
+            $langLine .= "\n".$pinyinLine;
+        }
+
+        $topik = trim((string) $data['topik']);
+        $learningObjective = trim((string) ($data['learning_objective'] ?? ''));
+        $user = $request->user();
+
+        // Materi: file kecil (inline) | file besar (RAG) | buku lama (document_uuid) | teks
+        // hasil OCR foto halaman buku (material_text, dari alur "Foto buku" spt di RPM Learning).
+        $document = null;
+        $inlineMaterial = '';
+        $materialSource = null;
+
+        try {
+            if ($request->hasFile('file')) {
+                [$inlineMaterial, $document] = $this->materials->resolveUpload($user, $request->file('file'));
+                $materialSource = 'file';
+            } elseif (! empty($data['document_uuid'])) {
+                $document = $this->materials->findOwned($user, (string) $data['document_uuid']);
+                $materialSource = 'file';
+            } elseif (trim((string) ($data['material_text'] ?? '')) !== '') {
+                $inlineMaterial = trim((string) $data['material_text']);
+                $materialSource = 'camera_ocr';
+            }
+
+            $material = $inlineMaterial;
+            if ($material === '' && $document) {
+                $material = $this->materials->retrieveForTopic(
+                    $document,
+                    $topik,
+                    $user->uuid,
+                    ! $request->hasFile('file'),
+                );
+            }
+        } catch (TeacherMaterialException $e) {
+            return response()->json($e->toArray(), $e->httpStatus);
+        }
+
+        $jenis = $this->quizTypeSummary($data['jenis_soal']);
+        $jenjang = ! empty($data['jenjang']) ? "untuk jenjang {$data['jenjang']}" : '';
+        $formatInstruction = $this->quizFormatInstruction(
+            (int) $data['jumlah'],
+            $data['jenis_soal'],
+            $data['tingkat'],
+            $data['jenjang'] ?? null,
+            $topik,
+            (bool) $data['soal_bergambar'],
+        );
+
+        if ($material !== '') {
+            $label = $materialSource === 'camera_ocr' ? 'MATERI SCAN BUKU' : 'MATERI FILE';
+            $sumber = $materialSource === 'camera_ocr' ? 'scan/foto halaman buku' : 'file';
+            $prompt = "Buat {$data['jumlah']} soal ({$jenis}) dengan tingkat kesulitan "
+                ."{$data['tingkat']} {$jenjang} berdasarkan materi dari {$sumber} berikut.\n"
+                ."Fokus topik: \"{$topik}\".\n"
+                .($learningObjective !== '' ? "Materi/tujuan pembelajaran: {$learningObjective}\n" : '')
+                ."JANGAN keluar dari cakupan {$label}. Bila sebuah fakta tidak ada di "
+                ."dalamnya, jangan mengarang — susun soal dari bagian yang tersedia saja.\n"
+                .$langLine."\n\n"
+                ."{$label}:\n{$material}\n\n"
+                .$formatInstruction;
+        } else {
+            $prompt = "Buat {$data['jumlah']} soal ({$jenis}) dengan tingkat kesulitan "
+                ."{$data['tingkat']} tentang topik: \"{$topik}\" {$jenjang}.\n"
+                .($learningObjective !== '' ? "Materi/tujuan pembelajaran: {$learningObjective}\n" : '')
+                .$langLine."\n\n"
+                .$formatInstruction;
+        }
+
+        $title = $topik;
+
+        return [
+            'system' => TeacherOutputLanguage::appendSystemNote((string) config('ai.teacher.quiz'), $outputLanguage),
+            'prompt' => $prompt,
+            'answer_style' => 'Tulis sebagai dokumen soal teks polos siap cetak sesuai format yang diminta. JANGAN memakai Markdown, heading #, atau bullet dekoratif.',
+            'title' => (string) $title,
+            'soal_bergambar' => (bool) $data['soal_bergambar'],
+            'output_language' => $outputLanguage,
+            'include_global_system_prompt' => TeacherOutputLanguage::usesGlobalSystemPrompt($outputLanguage),
+            'history' => [
+                'type' => 'quiz',
+                'type_label' => 'Generator Soal',
+                'title' => $title,
+                'metadata' => [
+                    'jumlah' => $data['jumlah'],
+                    'jenis_soal' => $data['jenis_soal'],
+                    'tingkat' => $data['tingkat'],
+                    'jenjang' => $data['jenjang'] ?? null,
+                    'soal_bergambar' => (bool) $data['soal_bergambar'],
+                    'output_language' => $outputLanguage,
+                    'include_pinyin' => $includePinyin,
+                    'file' => $request->file('file')?->getClientOriginalName() ?? $document?->title,
+                    'document_uuid' => $document?->uuid,
+                    'source' => $materialSource ?? 'topic',
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{system:string,prompt:string,answer_style:string,history:array,title:string}|JsonResponse
+     */
+    private function composeBlueprint(Request $request): array|JsonResponse
+    {
+        $maxMaterial = max(4000, (int) config('ai.max_input_chars', 8000) * 2);
+        $data = $request->validate([
+            'topik' => ['required', 'string', 'max:500'],
+            'mapel' => ['nullable', 'string', 'max:120'],
+            'jenjang' => ['nullable', 'string', 'max:120'],
+            'jumlah' => ['required', 'integer', 'min:1', 'max:60'],
+            'bentuk_penilaian' => ['required', 'string', 'max:120'],
+            'kompetensi' => ['nullable', 'string', 'max:4000'],
+            'catatan' => ['nullable', 'string', 'max:2000'],
+            'file' => ['nullable', 'file', 'mimes:pdf,doc,docx', 'max:10240'],
+            'source_text' => ['nullable', 'string', 'max:'.$maxMaterial],
+        ]);
+
+        $topik = trim((string) $data['topik']);
+        $mapel = trim((string) ($data['mapel'] ?? '')) ?: '[Mata Pelajaran]';
+        $jenjang = trim((string) ($data['jenjang'] ?? '')) ?: '[Kelas / Semester]';
+        $kompetensi = trim((string) ($data['kompetensi'] ?? ''));
+        $catatan = trim((string) ($data['catatan'] ?? ''));
+        $kop = SchoolLetterhead::asPlainText();
+        $sourceText = trim((string) ($data['source_text'] ?? ''));
+        $sourceName = '';
+        $sourceType = 'manual';
+
+        if ($request->hasFile('file')) {
+            $file = $request->file('file');
+            $extension = strtolower($file->getClientOriginalExtension() ?: DocumentText::extensionFromMime($file->getMimeType()));
+            $sourceText = $this->extractQuizDocumentText($file->getRealPath(), $extension, true);
+            $sourceName = $file->getClientOriginalName();
+            $sourceType = 'file';
+
+            if ($sourceText === '') {
+                return response()->json([
+                    'ok' => false,
+                    'message' => 'Teks dari file belum bisa dibaca. Pakai PDF teks/Word, atau kirim hasil Generator Soal ke Kisi-kisi.',
+                    'error_code' => 'material_extract_failed',
+                    'suggest_camera' => false,
+                    'quota' => $this->aiPublicQuotaUsage(),
+                ], 422);
+            }
+        } elseif ($sourceText !== '') {
+            $sourceName = 'Hasil Generator Soal';
+            $sourceType = 'generated_quiz';
+        }
+
+        $sourceBlock = '';
+        if ($sourceText !== '') {
+            $sourceBlock = <<<TXT
+
+SUMBER SOAL WAJIB DIIKUTI:
+{$sourceText}
+
+ATURAN KHUSUS BERDASARKAN SUMBER:
+- Susun kisi-kisi dari SUMBER SOAL WAJIB DIIKUTI di atas, bukan dari pengetahuan umum.
+- Nomor soal, bentuk soal, kunci jawaban, materi, dan indikator harus konsisten dengan sumber.
+- Jika sumber berisi kunci jawaban, salin/olah kunci sesuai nomor soal. Jika kunci suatu nomor tidak tersedia, tulis "[perlu verifikasi]" pada kunci/penjelasan nomor itu.
+- Jangan menambah nomor soal di luar sumber. Jika jumlah pada form berbeda dari sumber, prioritaskan nomor yang benar-benar ada di sumber dan jelaskan di CATATAN.
+- Gunakan topik, TP/CP, dan catatan guru hanya untuk memperjelas indikator; jangan dipakai untuk membuat fakta baru yang tidak ada pada sumber.
+TXT;
+        }
+
+        $prompt = <<<TXT
+Buat kisi-kisi asesmen sekolah siap pakai BESERTA kunci jawabannya.
+Model export harus sama seperti contoh PDF "Kisi-Kisi_Guru_Beserta_jawabannya.pdf": halaman awal berisi header kisi-kisi, identitas asesmen, tabel kisi-kisi; halaman berikutnya berisi Kunci Jawaban per bentuk soal dan Rekap Penilaian.
+
+{$kop}
+KISI-KISI PENILAIAN {$data['bentuk_penilaian']}
+{$mapel}
+
+Satuan Pendidikan : [Satuan Pendidikan]
+Mata Pelajaran : {$mapel}
+Kelas / Semester : {$jenjang}
+Tahun Pelajaran : [Tahun Pelajaran]
+Topik / Materi : {$topik}
+Bentuk Penilaian : {$data['bentuk_penilaian']}
+Jumlah Soal : {$data['jumlah']}
+Alokasi Waktu : [Alokasi Waktu]
+Kurikulum : [Kurikulum]
+
+Tujuan Pembelajaran / Kompetensi:
+{$kompetensi}
+
+Catatan guru:
+{$catatan}
+{$sourceBlock}
+
+FORMAT WAJIB:
+1. Judul dua baris: "KISI-KISI PENILAIAN [BENTUK]" lalu nama mata pelajaran/topik.
+2. Identitas memakai label persis: Satuan Pendidikan, Mata Pelajaran, Kelas / Semester, Tahun Pelajaran, Jumlah Soal, Alokasi Waktu, Kurikulum.
+3. Tulis marker "TABEL KISI-KISI", lalu tabel dengan delimiter "|" dan kolom persis:
+No | Elemen / Capaian Pembelajaran | Materi Pokok | Indikator Soal | Level Kognitif (Taksonomi Bloom) | Bentuk Soal | No. Soal
+4. Tulis "LEGENDA LEVEL KOGNITIF", "CATATAN", dan "TANDA TANGAN".
+5. Tulis halaman kunci dengan judul "KUNCI JAWABAN [BENTUK] - [MATA PELAJARAN]" dan subjudul kelas/semester/tahun.
+6. Kelompokkan kunci per bagian:
+A. PILIHAN GANDA (Soal No. ...)
+No | Kunci | Jawaban
+B. BENAR / SALAH (Soal No. ...)
+No | Kunci | Penjelasan / Alasan
+C. PILIHAN GANDA KOMPLEKS (Soal No. ...)
+No | Kunci (Jawaban Benar) | Uraian Jawaban yang Benar
+D. MENJODOHKAN (Soal No. ...)
+Soal | Istilah / Konsep | Pasangan yang Tepat
+7. Tulis "REKAP PENILAIAN", lalu tabel:
+Bagian | Bentuk Soal | Jumlah Soal | Skor per Soal | Total Skor
+
+ATURAN:
+- Total nomor soal harus {$data['jumlah']}.
+- Indikator harus operasional dan bisa diuji.
+- Level kognitif gunakan C1-C6 atau label setara bila lebih sesuai.
+- Jangan mengarang data resmi sekolah di luar input.
+- Jika ada SUMBER SOAL WAJIB DIIKUTI, jangan mengarang soal/kunci baru di luar sumber itu.
+- Wajib sertakan kunci jawaban dan rekap penilaian.
+- Tulis teks polos; tabel WAJIB memakai delimiter "|" agar bisa diexport sama persis model PDF.
+TXT;
+
+        $title = 'Kisi-kisi '.$topik;
+
+        return [
+            'system' => (string) config('ai.teacher.blueprint'),
+            'prompt' => $prompt,
+            'answer_style' => 'Tulis sebagai dokumen kisi-kisi teks polos. Tabel WAJIB memakai delimiter pipe "|" sesuai format yang diminta agar export mengikuti model PDF acuan.',
+            'title' => $title,
+            'history' => [
+                'type' => 'blueprint',
+                'type_label' => 'Kisi-kisi',
+                'title' => $title,
+                'metadata' => [
+                    'topik' => $topik,
+                    'mapel' => $data['mapel'] ?? null,
+                    'jenjang' => $data['jenjang'] ?? null,
+                    'jumlah' => $data['jumlah'],
+                    'bentuk_penilaian' => $data['bentuk_penilaian'],
+                    'source' => $sourceType,
+                    'source_file' => $sourceName ?: null,
+                    'source_chars' => $sourceText !== '' ? mb_strlen($sourceText) : 0,
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{system:string,prompt:string,answer_style:string,history:array,title:string}|JsonResponse
+     */
+    private function composeTpAtp(Request $request): array|JsonResponse
+    {
+        $rawMapel = trim((string) $request->input('mapel', ''));
+        $standard = $rawMapel !== '' ? StandardCurriculumCp::find($rawMapel) : null;
+
+        if (! $request->filled('cp') && $request->filled('cp_custom')) {
+            $request->merge(['cp' => $request->input('cp_custom')]);
+        } elseif (! $request->filled('cp') && $standard !== null) {
+            $request->merge([
+                'cp' => $standard['cp_utama'] ?? '',
+            ]);
+            if (! $request->filled('elemen') && ! empty($standard['elemen_utama'])) {
+                $request->merge(['elemen' => $standard['elemen_utama']]);
+            }
+        }
+
+        $data = $request->validate([
+            'mode' => ['nullable', 'in:both,tp,atp'],
+            'mapel' => ['required', 'string', 'max:150'],
+            'fase_kelas' => ['nullable', 'string', 'max:100'],
+            'tahun' => ['nullable', 'string', 'max:50'],
+            'elemen' => ['nullable', 'string', 'max:500'],
+            'cp' => ['required', 'string', 'max:10000'],
+            'lingkup_materi' => ['nullable', 'string', 'max:3000'],
+            'jp' => ['nullable', 'integer', 'min:1', 'max:120'],
+            'catatan' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $mode = $data['mode'] ?? 'both';
+        $mapel = trim((string) $data['mapel']);
+        $faseKelas = trim((string) ($data['fase_kelas'] ?? '')) ?: 'D/VII-IX';
+        $activeSem = Semester::aktif() ?? Semester::first();
+        $tahun = trim((string) ($data['tahun'] ?? '')) ?: ($activeSem?->tahun ?? '2026-2027');
+        $tahun = str_replace('/', '-', $tahun);
+        $elemen = trim((string) ($data['elemen'] ?? '')) ?: 'Pemahaman Konsep';
+        $cp = trim((string) $data['cp']);
+        $lingkupMateri = trim((string) ($data['lingkup_materi'] ?? ''));
+        $jp = (int) ($data['jp'] ?? 27);
+        $catatan = trim((string) ($data['catatan'] ?? ''));
+
+        $kop = SchoolLetterhead::asPlainText();
+        $user = $request->user();
+        $userGuru = $user?->guru;
+        $namaGuru = $userGuru?->nama ?: ($user?->name ?: 'Guru Mata Pelajaran');
+        $nikGuru = $userGuru?->nik ?: ($userGuru?->nip ?: ($user?->username ?: '-'));
+        $kota = trim((string) Setting::get('kota', 'Tanjungpinang'));
+        if (str_starts_with(strtolower($kota), 'kota ')) {
+            $kota = substr($kota, 5);
+        }
+        $kota = $kota ?: 'Tanjungpinang';
+        $bulanIndo = [
+            1 => 'Januari', 2 => 'Februari', 3 => 'Maret', 4 => 'April',
+            5 => 'Mei', 6 => 'Juni', 7 => 'Juli', 8 => 'Agustus',
+            9 => 'September', 10 => 'Oktober', 11 => 'November', 12 => 'Desember',
+        ];
+        $tanggalHariIni = $kota.', '.now()->format('j').' '.$bulanIndo[(int) now()->format('n')].' '.now()->format('Y');
+
+        $instruksiLingkupMateri = '';
+        if ($lingkupMateri !== '') {
+            $instruksiLingkupMateri = <<<TXT
+
+LINGKUP MATERI YANG DITENTUKAN GURU (WAJIB DIIKUTI SECARA KONSISTEN):
+Guru telah menetapkan daftar lingkup materi pokok secara manual sebagai berikut:
+{$lingkupMateri}
+
+PERHATIAN KHUSUS UNTUK LINGKUP MATERI DI ATAS:
+- Kamu WAJIB menyusun Tujuan Pembelajaran (TP) dan Alur Tujuan Pembelajaran (ATP) dengan MENGGUNAKAN LINGKUP MATERI DI ATAS.
+- Petakan dan distribusikan butir-butir TP secara logis, runtut, dan terstruktur ke dalam masing-masing lingkup materi tersebut.
+- ATURAN JUMLAH & VARIASI TP: Untuk setiap lingkup materi (baik jika langsung 3 tingkat kelas 7, 8, 9 maupun per tingkat), VARIASIKAN jumlah butir TP sesuai kedalaman materi. Materi yang luas dan kompleks WAJIB dibuat menjadi 3 sampai 4 butir TP (maksimal 4 TP), sedangkan materi yang lebih ringkas 2 sampai 3 butir TP (minimal 2 TP). DILARANG KERAS membuat semua materi seragam hanya 2 TP!
+- Jangan mengganti, mengabaikan, atau mengacak lingkup materi di atas dengan topik lain yang tidak relevan.
+TXT;
+        }
+
+        $instruksiKhusus = '';
+        if ($catatan !== '') {
+            $instruksiKhusus = "\nCatatan dan Fokus Khusus dari Guru:\n{$catatan}\n";
+        }
+
+        $prompt = <<<TXT
+Kamu diminta menyusun dokumen resmi Tujuan Pembelajaran (TP) dan Alur Tujuan Pembelajaran (ATP) Kurikulum Merdeka yang disesuaikan dengan Capaian Pembelajaran (CP) mata pelajaran.
+
+KOP SURAT RESMI SEKOLAH (Wajib disalin PERSIS; berasal dari data identitas sekolah yang tersimpan di aplikasi SIMS):
+{$kop}
+
+DATA MATA PELAJARAN:
+- Mata Pelajaran: {$mapel}
+- Fase / Kelas: {$faseKelas}
+- Tahun Pelajaran: {$tahun}
+- Elemen: {$elemen}
+- Capaian Pembelajaran (CP):
+{$cp}
+- Estimasi Alokasi Waktu: {$jp} JP per lingkup materi
+{$instruksiLingkupMateri}
+{$instruksiKhusus}
+
+PETUNJUK FORMAT DOKUMEN:
+- Gunakan KOP SURAT RESMI SEKOLAH di atas (salin persis dari data aplikasi SIMS). Jangan mengganti atau mengarang nama yayasan/sekolah lain.
+- Struktur tabel dan alur ikuti format standar dokumen resmi:
+TXT;
+
+        if ($mode === 'both' || $mode === 'tp') {
+            $petunjukLingkup = $lingkupMateri !== ''
+                ? 'Gunakan lingkup materi yang telah ditentukan oleh guru di atas untuk mengelompokkan dan menjabarkan setiap TP.'
+                : 'Tuliskan nama Lingkup Materi pokok yang terperinci dan kontekstual (bukan singkatan abstrak) untuk setiap baris TP agar materi pembelajaran terjabarkan dengan tuntas.';
+
+            $prompt .= <<<TXT
+
+1. BAGIAN TUJUAN PEMBELAJARAN (TP):
+Tulis judul:
+TUJUAN PEMBELAJARAN (TP)
+MATA PELAJARAN : {$mapel}
+FASE / KELAS : {$faseKelas}
+TAHUN PELAJARAN : {$tahun}
+
+Tulis penanda: "TABEL TUJUAN PEMBELAJARAN"
+Lalu buat tabel dengan delimiter pipe "|" dengan kolom persis:
+ELEMEN | CAPAIAN PEMBELAJARAN | LINGKUP MATERI | TUJUAN PEMBELAJARAN (TP) | KODE TP | ALOKASI WAKTU (JP) | SEMESTER
+
+Aturan Tabel TP:
+- Turunkan butir-butir Tujuan Pembelajaran (TP) dari teks Capaian Pembelajaran (CP) yang diberikan.
+- TP harus operasional, spesifik, terukur, dan menggunakan Kata Kerja Operasional (KKO) Taksonomi Bloom (seperti Menjelaskan, Mengidentifikasi, Menganalisis, Memprediksi, Menguraikan, Merefleksikan).
+- JABARKAN LINGKUP MATERI SECARA JELAS: {$petunjukLingkup}
+- Kelompokkan TP ke dalam Lingkup Materi pokok yang relevan.
+- ATURAN JUMLAH DAN VARIASI TP PER LINGKUP MATERI (WAJIB DIPATUHI & HARUS BERVARIASI):
+  * DILARANG KERAS membuat semua materi seragam hanya 2 TP!
+  * Kamu WAJIB MEMVARIASIKAN jumlah butir TP sesuai kedalaman dan kompleksitas materi:
+    - Jika materi luas, padat konsep, atau kompleks (misal: sejarah lokal dan toponimi nusantara, dinamika sosial dan integrasi bangsa, mitigasi bencana dan kebijakan ekonomi, aljabar linear, geometri bangun ruang, dsb): WAJIB DIBUAT MENJADI 3 SAMPAI 4 BUTIR TP (maksimal 4 TP).
+    - Jika materi lebih ringkas atau fokus: buat 2 sampai 3 butir TP (minimal 2 TP).
+  * Dokumen untuk 3 tingkat (Kelas 7, 8, 9) maupun per tingkat HARUS memiliki variasi yang dinamis: beberapa materi memiliki 3 TP, materi kompleks memiliki 4 TP, dan materi sederhana 2 TP.
+  * DILARANG membuat hanya 1 butir TP untuk satu materi (terlalu sedikit).
+  * DILARANG membuat lebih dari 4 butir TP dalam satu materi (agar alur tetap fokus dan proporsional).
+- Kode TP harus sistematis:
+  * Jika mencakup 3 tingkat: sesuaikan kode dengan jenjang kelas, contoh Kelas 7: [Inisial].7.1 s/d [Inisial].7.x; Kelas 8: [Inisial].8.1 s/d [Inisial].8.x; Kelas 9: [Inisial].9.1 s/d [Inisial].9.x.
+- ATURAN PENTING KOLOM ALOKASI WAKTU (JP) DI TABEL TP: Tuliskan nilai alokasi total materi "{$jp} JP" pada setiap baris TP dalam lingkup materi tersebut (misalnya "{$jp} JP"). Kolom ini di tabel TP akan dimerge menjadi satu sel utuh per lingkup materi.
+- Tentukan Semester pelaksanaan ("Ganjil" atau "Genap").
+TXT;
+        }
+
+        if ($mode === 'both' || $mode === 'atp') {
+            $prompt .= <<<TXT
+
+2. BAGIAN ALUR TUJUAN PEMBELAJARAN (ATP):
+Tulis judul:
+ALUR TUJUAN PEMBELAJARAN (ATP)
+MATA PELAJARAN : {$mapel}
+FASE / KELAS : {$faseKelas}
+TAHUN PELAJARAN : {$tahun}
+
+Tulis penanda: "DIAGRAM ALUR TUJUAN PEMBELAJARAN"
+Lalu susun alur tahapan pembelajaran Fase D (Kelas 7, Kelas 8, Kelas 9) dengan format baris tabel delimiter pipe "|":
+TAHAP | KELAS | SEMESTER | KODE | LINGKUP MATERI | TUJUAN PEMBELAJARAN | TIPE
+
+Keterangan kolom Diagram Alur:
+- TAHAP: label tahapan (misal Awal, TP 1, TP 2, Mid, Transisi, Akhir)
+- KELAS: 7, 8, atau 9
+- SEMESTER: Ganjil atau Genap
+- KODE: kode TP (misal PK.7.1, PK.7.2, PK.8.1, dst; atau "-" untuk titik awal/transisi)
+- LINGKUP MATERI: jabarkan lingkup materi pokok secara jelas (misal: "Keberagaman Geografis dan SDA", "Dinamika Sosial dan Lembaga"; atau "-" untuk titik awal/transisi)
+- TUJUAN PEMBELAJARAN: teks kompetensi ringkas untuk kotak diagram
+- TIPE: salah satu dari:
+  * "start" : untuk node awal semester (wajib tulis judul lengkap di kolom TUJUAN PEMBELAJARAN, misal "Awal fase D Kelas 7 Semester Ganjil")
+  * "tp" : untuk kotak tujuan pembelajaran utama
+  * "transition" : untuk node penghubung antarkelas (wajib tulis judul lengkap di kolom TUJUAN PEMBELAJARAN, misal "Capaian Pembelajaran Akhir Fase D Kelas 7 menuju pembelajaran fase D kelas 8 Semester Ganjil")
+  * "end" : untuk node capaian akhir fase (wajib tulis judul di kolom TUJUAN PEMBELAJARAN, misal "Capaian Pembelajaran Akhir Fase D")
+
+PENTING UNTUK NODE TIPE "start", "transition", dan "end":
+- Kolom TUJUAN PEMBELAJARAN TIDAK BOLEH BERISI TANDA HUBUNG ("-")! Selalu tuliskan kalimat judul lengkapnya.
+- Jangan biarkan kotak start atau transisi hanya berisi tanda "-".
+
+Aturan Diagram Alur:
+- Bagi alur secara sistematis per jenjang kelas (Kelas 7, Kelas 8, Kelas 9).
+- Tampilkan butir-butir TP yang telah bervariasi per lingkup materi (2 sampai 4 TP per materi sesuai kompleksitasnya).
+- JABARKAN LINGKUP MATERI PADA SETIAP KOTAK TP secara jelas dan terarah sesuai muatan kurikulum.
+
+Lalu tulis penanda: "TABEL ALUR TUJUAN PEMBELAJARAN"
+NO | KELAS | SEMESTER | LINGKUP MATERI | KODE TP | TUJUAN PEMBELAJARAN | ALOKASI JP
+(Daftar urutan alur pembelajaran secara kronologis dari awal hingga akhir fase).
+
+ATURAN PENTING KOLOM ALOKASI JP PADA TABEL ATP:
+- Pada tabel ATP, kolom ALOKASI JP adalah alokasi waktu PER BUTIR TUJUAN PEMBELAJARAN (bukan mengulang total materi)!
+- Nilai ALOKASI JP per butir TP WAJIB dihitung dari total JP lingkup materi tersebut ("{$jp} JP") dibagi sesuai jumlah butir TP di dalamnya sehingga jumlah alokasi per TP pas dengan total materi.
+  * Contoh: Jika lingkup materi memiliki alokasi 18 JP dan terdiri dari 2 butir TP, maka alokasi per TP di tabel ATP masing-masing adalah "9 JP" dan "9 JP" (18 / 2 = 9 JP), BUKAN menuliskan 18 JP di setiap baris TP!
+  * Contoh: Jika alokasi materi 27 JP dan ada 3 butir TP, maka alokasi per butir TP adalah "9 JP", "9 JP", "9 JP" (27 / 3 = 9 JP).
+  * Contoh: Jika alokasi materi 27 JP dan ada 4 butir TP, maka bagikan secara proporsional (misal 7 JP, 7 JP, 7 JP, 6 JP sehingga totalnya pas 27 JP).
+- DILARANG KERAS mengulang angka total materi (misal {$jp} JP) di setiap baris butir TP pada tabel ATP!
+TXT;
+        }
+
+        $prompt .= <<<TXT
+
+3. PENUTUP & TANDA TANGAN:
+Tulis marker "TANDA TANGAN:"
+{$tanggalHariIni}
+Guru Mata Pelajaran
+
+{$namaGuru}
+NIK. {$nikGuru}
+
+ATURAN PENTING:
+- Gunakan teks polos dengan pemisah pipe "|" untuk tabel agar sistem dapat merender menjadi tabel dan diagram visual berformat persis contoh PDF acuan.
+- Jangan gunakan formatting Markdown lain (#, **, ```) di dalam isi dokumen.
+- Pastikan seluruh tujuan pembelajaran selaras dengan teks CP yang diberikan.
+TXT;
+
+        $titleLabel = match ($mode) {
+            'tp' => 'TP - ' . $mapel,
+            'atp' => 'ATP - ' . $mapel,
+            default => 'TP & ATP - ' . $mapel,
+        };
+
+        return [
+            'system' => (string) config('ai.teacher.tpatp'),
+            'prompt' => $prompt,
+            'answer_style' => 'Tulis sebagai dokumen TP & ATP resmi berformat teks polos dengan tabel pipe "|". Jangan gunakan markdown pagar (#) atau bintang (**).',
+            'title' => $titleLabel,
+            'history' => [
+                'type' => 'tpatp',
+                'type_label' => 'TP & ATP',
+                'title' => $titleLabel,
+                'metadata' => [
+                    'mode' => $mode,
+                    'mapel' => $mapel,
+                    'fase_kelas' => $faseKelas,
+                    'tahun' => $tahun,
+                    'elemen' => $elemen,
+                    'lingkup_materi' => $lingkupMateri,
+                    'jp' => $jp,
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{system:string,prompt:string,answer_style:string,history:array,title:string,learning_tool:string}|JsonResponse
+     */
+    private function composeLearning(Request $request): array|JsonResponse
+    {
+        $maxMaterial = max(4000, (int) config('ai.max_input_chars', 8000) * 2);
+        $data = $request->validate([
+            'tool' => ['required', 'in:rpp'],
+            'topik' => ['nullable', 'required_without_all:file,material_text,document_uuid', 'string', 'max:500'],
+            'mapel' => ['nullable', 'string', 'max:100'],
+            'jenjang' => ['nullable', 'string', 'max:100'],
+            'durasi' => ['nullable', 'string', 'max:100'],
+            'file' => ['nullable', 'file', 'mimes:pdf,doc,docx', 'max:10240'],
+            'document_uuid' => ['nullable', 'string', 'max:64'],
+            'material_text' => ['nullable', 'string', 'max:'.$maxMaterial],
+            'output_language' => TeacherOutputLanguage::validationRules(),
+            'include_pinyin' => ['sometimes', 'boolean'],
+        ]);
+
+        $outputLanguage = TeacherOutputLanguage::normalize($data['output_language'] ?? null);
+        $includePinyin = $request->boolean('include_pinyin') && $outputLanguage === 'zh-CN';
+        $langLine = TeacherOutputLanguage::promptLine($outputLanguage);
+        if ($pinyinLine = TeacherOutputLanguage::pinyinLine($includePinyin)) {
+            $langLine .= "\n".$pinyinLine;
+        }
+        if ($outputLanguage === 'zh-CN') {
+            $langLine .= "\n".TeacherOutputLanguage::rpmMandarinHints();
+        }
+        $user = $request->user();
+        $document = null;
+        $inlineMaterial = '';
+        $materialSource = null;
+
+        try {
+            if ($request->hasFile('file')) {
+                [$inlineMaterial, $document] = $this->materials->resolveUpload($user, $request->file('file'));
+                $materialSource = 'file';
+            } elseif (! empty($data['document_uuid'])) {
+                $document = $this->materials->findOwned($user, (string) $data['document_uuid']);
+                $materialSource = 'file';
+            } elseif (trim((string) ($data['material_text'] ?? '')) !== '') {
+                $inlineMaterial = trim((string) $data['material_text']);
+                $materialSource = 'camera_ocr';
+            }
+
+            $material = $inlineMaterial;
+            if ($material === '' && $document) {
+                $topikForRag = trim((string) ($data['topik'] ?? ''));
+                if ($topikForRag === '') {
+                    return response()->json([
+                        'ok' => false,
+                        'message' => 'Topik wajib diisi saat memakai buku/file besar agar bagian yang relevan bisa dicari.',
+                        // Supaya UI bisa resume tanpa unggah ulang setelah resolveUpload.
+                        'document_uuid' => $document->uuid,
+                    ], 422);
+                }
+                $material = $this->materials->retrieveForTopic(
+                    $document,
+                    $topikForRag,
+                    $user->uuid,
+                    ! $request->hasFile('file'),
+                );
+            }
+        } catch (TeacherMaterialException $e) {
+            return response()->json($e->toArray(), $e->httpStatus);
+        }
+
+        $toolLabel = $this->learningToolLabel($data['tool']);
+        $topik = trim((string) ($data['topik'] ?? ''));
+        $title = $topik !== ''
+            ? $topik
+            : ($materialSource === 'camera_ocr'
+                ? 'RPM dari foto buku'
+                : 'RPM dari file '.$request->file('file')?->getClientOriginalName());
+        $details = array_filter([
+            ! empty($data['mapel']) ? "Mata pelajaran: {$data['mapel']}" : null,
+            ! empty($data['jenjang']) ? "Jenjang/kelas: {$data['jenjang']}" : null,
+            ! empty($data['durasi']) ? "Alokasi waktu: {$data['durasi']}" : null,
+        ]);
+        $detailText = $details ? implode("\n", $details)."\n" : '';
+        $topicLine = $topik !== '' ? "Fokus/topik RPM: \"{$topik}\".\n" : '';
+
+        if ($material !== '') {
+            $label = $materialSource === 'camera_ocr' ? 'MATERI SCAN BUKU' : 'MATERI FILE';
+            $sumber = $materialSource === 'camera_ocr' ? 'scan/foto halaman buku' : 'file';
+            $prompt = "Buat {$toolLabel} siap pakai untuk guru berdasarkan materi dari {$sumber} berikut.\n"
+                .$topicLine
+                .$detailText
+                .$langLine."\n"
+                ."JANGAN keluar dari cakupan {$label}. Jika ada informasi yang belum ada di materi, gunakan placeholder yang jelas, bukan mengarang.\n\n"
+                ."{$label}:\n{$material}\n\n"
+                .$this->learningFormatInstruction($data['tool']);
+        } else {
+            $prompt = "Buat {$toolLabel} siap pakai untuk guru dengan topik: \"{$topik}\".\n"
+                .$detailText
+                .$langLine."\n\n"
+                .$this->learningFormatInstruction($data['tool']);
+        }
+
+        return [
+            'system' => TeacherOutputLanguage::appendSystemNote((string) config('ai.teacher.learning'), $outputLanguage),
+            'prompt' => $prompt,
+            'answer_style' => 'Tulis sebagai dokumen teks polos siap cetak. JANGAN memakai Markdown '
+                .'(tanpa **tebal**, tanpa heading #, tanpa tabel pipa selain yang diminta format).',
+            'title' => (string) $title,
+            'learning_tool' => $data['tool'],
+            'output_language' => $outputLanguage,
+            'include_global_system_prompt' => TeacherOutputLanguage::usesGlobalSystemPrompt($outputLanguage),
+            'history' => [
+                'type' => $data['tool'],
+                'type_label' => $toolLabel,
+                'title' => $title,
+                'metadata' => [
+                    'mapel' => $data['mapel'] ?? null,
+                    'jenjang' => $data['jenjang'] ?? null,
+                    'durasi' => $data['durasi'] ?? null,
+                    'output_language' => $outputLanguage,
+                    'include_pinyin' => $includePinyin,
+                    'file' => $request->file('file')?->getClientOriginalName() ?? $document?->title,
+                    'document_uuid' => $document?->uuid,
+                    'source' => $materialSource ?? 'topic',
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * Siapkan binary gambar untuk OCR: resize edge bila perlu, JPEG quality tinggi.
+     *
+     * @return array{binary:string,mime:string}|null
+     */
+    private function prepareOcrImageBinary(string $path, string $mime): ?array
+    {
+        if (! is_readable($path)) {
+            return null;
+        }
+
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+
+        $mime = strtolower($mime);
+        if ($mime === 'image/jpg') {
+            $mime = 'image/jpeg';
+        }
+
+        $maxEdge = max(800, (int) config('ai.ocr.max_edge', 1920));
+        $quality = max(80, min(95, (int) config('ai.ocr.jpeg_quality', 90)));
+
+        if (! function_exists('imagecreatefromstring')) {
+            return ['binary' => $raw, 'mime' => in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true) ? $mime : 'image/jpeg'];
+        }
+
+        $src = @imagecreatefromstring($raw);
+        if ($src === false) {
+            // Jangan kirim biner non-gambar ke provider eksternal.
+            return null;
+        }
+
+        $w = imagesx($src);
+        $h = imagesy($src);
+        if ($w < 1 || $h < 1) {
+            imagedestroy($src);
+
+            return null;
+        }
+
+        $scale = 1.0;
+        $long = max($w, $h);
+        if ($long > $maxEdge) {
+            $scale = $maxEdge / $long;
+        }
+
+        $nw = max(1, (int) round($w * $scale));
+        $nh = max(1, (int) round($h * $scale));
+
+        if ($scale < 1.0) {
+            $dst = imagecreatetruecolor($nw, $nh);
+            imagecopyresampled($dst, $src, 0, 0, 0, 0, $nw, $nh, $w, $h);
+            imagedestroy($src);
+            $src = $dst;
+        }
+
+        ob_start();
+        imagejpeg($src, null, $quality);
+        $binary = ob_get_clean();
+        imagedestroy($src);
+
+        if ($binary === false || $binary === '') {
+            return ['binary' => $raw, 'mime' => 'image/jpeg'];
+        }
+
+        return ['binary' => $binary, 'mime' => 'image/jpeg'];
+    }
+
+    /**
+     * @return array{system:string,prompt:string,history:array,title:string}|JsonResponse
+     */
+    private function composeSummary(Request $request): array|JsonResponse
+    {
+        $data = $request->validate([
+            'materi' => ['required', 'string', 'max:'.config('ai.max_input_chars')],
+        ]);
+
+        $prompt = SchoolLetterhead::asPromptBlock()
+            ."\n\nRangkum materi berikut menjadi poin-poin ringkas untuk siswa. "
+            ."Mulai jawaban dengan kop surat di atas, lalu judul RANGKUMAN MATERI, lalu isi.\n\n"
+            .$data['materi'];
+
+        return [
+            'system' => (string) config('ai.teacher.summary'),
+            'prompt' => $prompt,
+            'answer_style' => SchoolLetterhead::asPromptBlock()
+                ."\nTulis teks polos berstruktur. Mulai dengan kop, lalu RANGKUMAN MATERI, lalu poin-poin. Tanpa Markdown.",
+            'title' => Str::limit($data['materi'], 90),
+            'history' => [
+                'type' => 'summary',
+                'type_label' => 'Perangkum Materi',
+                'title' => Str::limit($data['materi'], 90),
+                'metadata' => [
+                    'panjang_materi' => mb_strlen($data['materi']),
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{system:string,prompt:string,history:array,title:string}|JsonResponse
+     */
+    private function composeFeedback(Request $request): array|JsonResponse
+    {
+        $data = $request->validate([
+            'konteks' => ['required', 'string', 'max:'.config('ai.max_input_chars')],
+            'nama' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $nama = $data['nama'] ? "untuk siswa bernama {$data['nama']}" : '';
+        $prompt = SchoolLetterhead::asPromptBlock()
+            ."\n\nSusun Catatan Siswa {$nama} berdasarkan konteks berikut. "
+            ."Tulis dengan nada hangat, membangun, dan mudah diterima siswa/orang tua. "
+            ."Mulai jawaban dengan kop surat di atas, lalu judul CATATAN SISWA, lalu isi.\n\n"
+            .$data['konteks'];
+        $title = ! empty($data['nama']) ? 'Catatan untuk '.$data['nama'] : Str::limit($data['konteks'], 90);
+
+        return [
+            'system' => (string) config('ai.teacher.feedback'),
+            'prompt' => $prompt,
+            'answer_style' => SchoolLetterhead::asPromptBlock()
+                ."\nTulis teks polos. Mulai dengan kop, lalu CATATAN SISWA, lalu isi. Tanpa Markdown.",
+            'title' => $title,
+            'history' => [
+                'type' => 'feedback',
+                'type_label' => 'Catatan Siswa',
+                'title' => $title,
+                'metadata' => [
+                    'nama' => $data['nama'] ?? null,
+                    'via' => 'sims',
+                ],
+            ],
+        ];
+    }
+
+    /** Pipeline bersama: rate limit -> Gemini (key pribadi) -> audit -> JSON. */
+    private function respond(Request $request, string $feature, string $system, string $prompt, int $maxOutputTokens = 2048, array $options = [], ?array $historyData = null): JsonResponse
+    {
+        if ($blocked = $this->requireTeacherReady($request)) {
+            return $blocked;
+        }
+
+        $user = $request->user();
+        $userId = $user->uuid;
+        $apiKey = $user->plainGeminiApiKey();
+
+        if ($limited = $this->aiRateLimited($feature, $userId)) {
+            return $limited;
+        }
+
+        try {
+            $result = $this->gemini->generate($prompt, $options + [
+                'system' => $system,
+                'max_output_tokens' => $maxOutputTokens, // keluaran guru cenderung lebih panjang
+                'api_key' => $apiKey,
+            ]);
+        } catch (RuntimeException $e) {
+            $this->logAiUsage($userId, $feature, config('ai.model'), 0, 0, 'error');
+
+            return response()->json([
+                'ok' => false,
+                'message' => $e->getMessage(),
+                'quota' => $this->aiPublicQuotaUsage(),
+            ], 502);
+        }
+
+        $this->logAiGenerationUsage(
+            $userId,
+            $feature,
+            $result,
+            'success',
+        );
+
+        $answer = SchoolLetterhead::ensurePrefix($result['text']);
+
+        $history = $historyData !== null
+            ? $this->storeHistory($userId, $historyData, $answer)
+            : null;
+
+        $payload = [
+            'ok' => true,
+            'answer' => $answer,
+            'history' => $history,
+            'quota' => $this->aiPublicQuotaUsage(),
+        ];
+        if (! empty($result['truncated'])) {
+            $payload['warning'] = 'Jawaban AI masih terpotong setelah dilanjutkan otomatis. Kurangi cakupan topik atau lampiran lalu coba lagi. Teks parsial tetap disimpan.';
+        }
+
+        return response()->json($payload);
+    }
+
+
+    private function storeHistory(string $userId, array $data, string $answer): array
+    {
+        $history = AiTeacherHistory::create([
+            'user_uuid' => $userId,
+            'type' => $data['type'],
+            'type_label' => $data['type_label'],
+            // Str::limit menambah '...' (3 char) di ujung, jadi batas angkanya dikurangi 3
+            // agar hasil ≤ lebar kolom (title VARCHAR(180), excerpt VARCHAR(500)). Tanpa ini
+            // MySQL strict menolak insert (SQLSTATE 22001 / error 1406); SQLite dev tidak
+            // menegakkan panjang VARCHAR sehingga bug ini lolos di lokal.
+            'title' => Str::limit(trim((string) $data['title']) ?: $data['type_label'], 177),
+            'excerpt' => Str::limit($this->plainExcerpt($answer), 497),
+            'metadata' => array_filter($data['metadata'] ?? [], fn ($value) => $value !== null && $value !== ''),
+            'answer' => $answer,
+        ]);
+
+        return $this->historyPayload($history);
+    }
+
+    private function historyPayload(AiTeacherHistory $history): array
+    {
+        return [
+            'uuid' => $history->uuid,
+            'type' => $history->type,
+            'type_label' => $history->type_label,
+            'title' => $history->title,
+            'excerpt' => $history->excerpt,
+            'answer' => $history->answer,
+            'metadata' => $history->metadata ?? [],
+            'created_at' => $history->created_at?->toIso8601String(),
+            'created_at_human' => $history->created_at?->locale('id')->diffForHumans(),
+        ];
+    }
+
+    private function plainExcerpt(string $answer): string
+    {
+        $text = strip_tags($answer);
+        $text = preg_replace('/\s+/u', ' ', $text);
+
+        return trim((string) $text);
+    }
+
+    private function validatedQuizExport(Request $request): array
+    {
+        return $request->validate([
+            'content' => ['required', 'string', 'max:50000'],
+            'title' => ['nullable', 'string', 'max:120'],
+            'interactive_quality' => ['nullable', 'boolean'],
+        ]);
+    }
+
+    private function validatedLearningExport(Request $request): array
+    {
+        return $request->validate([
+            'tool' => ['required', 'in:rpp'],
+            'title' => ['nullable', 'string', 'max:120'],
+            'content' => ['required', 'string', 'max:80000'],
+        ]);
+    }
+
+    private function learningExportTitle(array $data): string
+    {
+        $title = trim((string) ($data['title'] ?? ''));
+
+        return $title !== '' ? $title : $this->learningToolLabel($data['tool']);
+    }
+
+    private function quizTypeSummary(array $jenisSoal): string
+    {
+        return implode(', ', array_map(fn (string $type) => self::QUIZ_TYPES[$type], $jenisSoal));
+    }
+
+    private function quizSectionTemplates(array $jenisSoal): string
+    {
+        $templates = [
+            'pg_kompleks' => "Bagian %s - Pilihan Ganda Kompleks\n[nomor]. [soal]\nA. [opsi]\nB. [opsi]\nC. [opsi]\nD. [opsi]\nPetunjuk: pilih semua jawaban yang benar.",
+            'pg' => "Bagian %s - Pilihan Ganda\n[nomor]. [soal]\nA. [opsi]\nB. [opsi]\nC. [opsi]\nD. [opsi]",
+            'benar_salah' => "Bagian %s - Benar/Salah\n[nomor]. [pernyataan yang harus dinilai benar atau salah]",
+            'mencocokkan' => "Bagian %s - Mencocokkan\n[nomor]. Cocokkan pernyataan pada Kolom A dengan jawaban pada Kolom B.\nKolom A: [daftar pernyataan bernomor]\nKolom B: [daftar pilihan berhuruf]",
+            'isian' => "Bagian %s - Isian\n[nomor]. [kalimat soal dengan jawaban singkat]\nJawaban: ______________________________",
+        ];
+
+        $sections = [];
+        foreach ($jenisSoal as $index => $type) {
+            $letter = chr(65 + $index);
+            $sections[] = sprintf($templates[$type], $letter);
+        }
+
+        return implode("\n\n", $sections);
+    }
+
+    private function quizAnswerKeyTemplates(array $jenisSoal): string
+    {
+        $templates = [
+            'pg_kompleks' => "Pilihan Ganda Kompleks\n[nomor]. A, C",
+            'pg' => "Pilihan Ganda\n[nomor]. A",
+            'benar_salah' => "Benar/Salah\n[nomor]. Benar",
+            'mencocokkan' => "Mencocokkan\n[nomor]. 1-B, 2-A, 3-C",
+            'isian' => "Isian\n[nomor]. [jawaban singkat]",
+        ];
+
+        return implode("\n\n", array_map(fn (string $type) => $templates[$type], $jenisSoal));
+    }
+
+    private function quizTypeRules(array $jenisSoal): string
+    {
+        $rules = [
+            'pg_kompleks' => 'Pilihan Ganda Kompleks memakai opsi A-D dan boleh memiliki lebih dari satu jawaban benar; kunci ditulis seperti "1. A, C".',
+            'pg' => 'Pilihan Ganda memakai opsi A-D dan hanya satu jawaban benar; kunci ditulis seperti "1. A".',
+            'benar_salah' => 'Benar/Salah berupa pernyataan yang dinilai Benar atau Salah; kunci ditulis "Benar" atau "Salah".',
+            'mencocokkan' => 'Mencocokkan berisi pasangan Kolom A dan Kolom B; kunci ditulis dengan pasangan seperti "1-B, 2-A".',
+            'isian' => 'Isian meminta jawaban singkat; sediakan ruang jawaban dan kunci jawaban singkat.',
+        ];
+
+        return '- '.implode("\n- ", array_map(fn (string $type) => $rules[$type], $jenisSoal));
+    }
+
+    private function quizFormatInstruction(int $jumlah, array $jenisSoal, string $tingkat, ?string $jenjang, string $topik, bool $soalBergambar = false): string
+    {
+        $kelas = trim((string) $jenjang) !== '' ? trim((string) $jenjang) : '[KELAS / SEMESTER]';
+        $topikJudul = trim($topik) !== '' ? mb_strtoupper($topik) : '[TOPIK]';
+        $tingkatLabel = Str::title($tingkat);
+        $jenisLabel = $this->quizTypeSummary($jenisSoal);
+        $sectionTemplates = $this->quizSectionTemplates($jenisSoal);
+        $answerKeyTemplates = $this->quizAnswerKeyTemplates($jenisSoal);
+        $typeRules = $this->quizTypeRules($jenisSoal);
+        $gambarRules = $soalBergambar
+            ? <<<'GAMBAR'
+- Wajib menyertakan soal bergambar: pada SEMUA atau sebagian besar nomor, sisipkan penanda tepat di bawah teks soal (sebelum opsi A/B/C/D) dengan format:
+  [GAMBAR: deskripsi visual singkat yang spesifik]
+  Contoh: [GAMBAR: diagram sirkulasi darah manusia dengan label atrium dan ventrikel]
+- Deskripsi harus cukup jelas untuk digambar AI (objek, label, gaya diagram/sketsa sekolah).
+- Jangan menulis Markdown gambar, URL, atau base64. Hanya penanda [GAMBAR: ...].
+- Jangan menaruh penanda gambar di bagian Kunci Jawaban.
+GAMBAR
+            : '- Jangan menyisipkan gambar, Markdown gambar, atau URL gambar.';
+
+        $kop = SchoolLetterhead::asPlainText();
+
+        return <<<TXT
+FORMAT WAJIB mengikuti contoh file soal-agama-buddha.docx. Tulis teks polos dengan urutan ini, tanpa Markdown:
+
+{$kop}
+SOAL EVALUASI [MATA PELAJARAN / TOPIK]
+{$kelas} - Tingkat Kesulitan {$tingkatLabel}
+
+Mata Pelajaran : [isi mata pelajaran/topik: {$topikJudul}]
+Kelas / Semester : {$kelas}
+Nama : ...............................................................
+Nilai : ...............................................................
+
+Petunjuk Pengerjaan
+Kerjakan soal sesuai instruksi pada setiap bagian.
+Periksa kembali jawaban sebelum dikumpulkan.
+
+{$sectionTemplates}
+
+Kunci Jawaban & Pedoman Penilaian
+(Untuk Guru)
+
+{$answerKeyTemplates}
+
+ATURAN:
+- Jenis soal yang dibuat hanya: {$jenisLabel}.
+- Total soal harus {$jumlah} nomor, dibagi proporsional jika ada lebih dari satu jenis soal.
+- Nomor soal berurutan dari Bagian A sampai bagian terakhir.
+{$typeRules}
+{$gambarRules}
+- Salin PERSIS baris kop surat di atas (dari identitas sekolah di SIMS). Jangan mengarang yayasan/alamat/telp lain.
+- Jika data mata pelajaran/kelas/semester tidak tersedia, gunakan placeholder jelas.
+- Jangan menulis pengantar atau catatan di luar dokumen soal.
+TXT;
+    }
+
+    private function learningFormatInstruction(string $tool): string
+    {
+        return LearningDocument::formatInstruction($tool);
+    }
+
+    private function learningToolLabel(string $tool): string
+    {
+        return 'RPM Learning';
+    }
+
+    private function safeFileBase(string $title): string
+    {
+        return Str::slug($title) ?: 'perangkat-ajar-learning';
+    }
+
+    private function writeDocx(string $path, string $title, string $content, bool $includeTitle = true, bool $includeGeneratedNote = true): bool
+    {
+        $zip = new ZipArchive;
+        if ($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            return false;
+        }
+
+        $zip->addFromString('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+        $zip->addFromString('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+        $zip->addFromString('word/document.xml', $this->wordDocumentXml($title, $content, $includeTitle, $includeGeneratedNote));
+
+        return $zip->close();
+    }
+
+    private function wordDocumentXml(string $title, string $content, bool $includeTitle = true, bool $includeGeneratedNote = true): string
+    {
+        $lines = preg_split('/\R/u', trim($content)) ?: [];
+        $paragraphs = '';
+        if ($includeTitle) {
+            $paragraphs .= $this->wordParagraph($title, true);
+        }
+        if ($includeGeneratedNote) {
+            $paragraphs .= $this->wordParagraph('Dibuat dari Asisten Guru pada '.now()->format('d/m/Y H:i'));
+        }
+        if ($paragraphs !== '') {
+            $paragraphs .= '<w:p/>';
+        }
+
+        foreach ($lines as $line) {
+            $paragraphs .= $this->wordParagraph($line === '' ? ' ' : $line);
+        }
+
+        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            .'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            .'<w:body>'
+            .$paragraphs
+            .'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+            .'</w:body></w:document>';
+    }
+
+    private function wordParagraph(string $text, bool $bold = false): string
+    {
+        $escaped = htmlspecialchars($text, ENT_QUOTES | ENT_XML1, 'UTF-8');
+        $runProperties = $bold ? '<w:rPr><w:b/><w:sz w:val="32"/></w:rPr>' : '';
+
+        return '<w:p><w:r>'.$runProperties.'<w:t xml:space="preserve">'.$escaped.'</w:t></w:r></w:p>';
+    }
+
+    /** DELETE /ai/teacher/materials/{uuid} - Batalkan dan hapus materi guru. */
+    public function cancelMaterial(string $uuid, Request $request): JsonResponse
+    {
+        try {
+            $this->materials->cancelMaterial($uuid, $request->user());
+
+            return response()->json([
+                'ok' => true,
+                'message' => 'Pemrosesan materi berhasil dibatalkan dan dibersihkan.',
+            ]);
+        } catch (TeacherMaterialException $e) {
+            return response()->json($e->toArray(), $e->httpStatus);
+        }
+    }
+
+    private function extractQuizDocumentText(string $path, string $extension, bool $preserveNewlines = false): string
+    {
+        // Ekstraksi dipusatkan di DocumentText agar RagService (ingest RAG) membaca
+        // dokumen dengan cara yang persis sama seperti controller ini.
+        return DocumentText::extract($path, $extension, $preserveNewlines);
+    }
+}

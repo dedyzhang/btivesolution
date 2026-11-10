@@ -1,0 +1,1255 @@
+@extends('layouts.app')
+@section('title', 'Pengaturan')
+
+@section('content')
+<div class="max-w-4xl mx-auto" x-data="{ tab: '{{ request('tab', 'sekolah') }}' }">
+    <div class="mb-6">
+        <h1 class="page-title">Pengaturan Sistem</h1>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Konfigurasi sekolah, semester, dan penilaian</p>
+    </div>
+
+    {{-- Tabs --}}
+    <div class="flex gap-1 bg-slate-100 dark:bg-slate-800 rounded-2xl p-1.5 mb-6 flex-wrap">
+        @foreach(['sekolah'=>['Identitas & Tampilan','building-2'],'fitur'=>['Fitur','toggle-left'],'semester'=>['Semester','calendar-days'],'penilaian'=>['Penilaian','calculator'],'absensi'=>['Absensi','clock'],'disiplin'=>['Kedisiplinan','shield-alert'],'sosmed'=>['Media Sosial','share-2'],'integrasi'=>['Integrasi','plug'],'aplikasi'=>['Aplikasi','smartphone'],'performa'=>['Performa Server','sliders-horizontal']] as $key => [$label,$icon])
+        <button @click="tab='{{ $key }}'"
+                :class="tab==='{{ $key }}' ? 'bg-white dark:bg-slate-700 shadow-sm text-primary' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'"
+                class="seg flex-1 min-w-fit flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold transition">
+            <i data-lucide="{{ $icon }}" class="w-4 h-4"></i> {{ $label }}
+        </button>
+        @endforeach
+    </div>
+
+    {{-- Fitur Aktif (on/off modul, termasuk Arena Petualangan SD) --}}
+    <div x-show="tab==='fitur'" x-transition>
+        @include('settings.partials.fitur-aktif')
+        <p class="mt-3 text-xs text-slate-400">Daftar yang sama juga ada di menu <a href="{{ route('setting.roles') }}" class="text-primary font-semibold hover:underline">Hak Akses &amp; Fitur</a>.</p>
+    </div>
+
+    {{-- Identitas --}}
+    <div x-show="tab==='sekolah'" x-transition>
+        <form method="POST" action="{{ route('setting.identitas') }}" enctype="multipart/form-data" class="card p-6 space-y-4">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100 mb-2">Identitas Sekolah</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                @foreach([
+                    'nama_sekolah'=>'Nama Sekolah','npsn'=>'NPSN','kepala_sekolah'=>'Kepala Sekolah',
+                    'nip_kepala'=>'NIP Kepala','kota'=>'Kota','provinsi'=>'Provinsi','telp_sekolah'=>'No. Telepon',
+                ] as $key => $label)
+                <div>
+                    <label class="form-label">{{ $label }}</label>
+                    <input type="text" name="{{ $key }}" value="{{ old($key, $settings[$key] ?? '') }}" class="form-input">
+                </div>
+                @endforeach
+                <div class="sm:col-span-2">
+                    <label class="form-label">Alamat Sekolah</label>
+                    <textarea name="alamat_sekolah" rows="2" class="form-input">{{ old('alamat_sekolah', $settings['alamat_sekolah'] ?? '') }}</textarea>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-100 dark:border-slate-700 pt-4 mt-2">
+                <label class="form-label font-bold text-slate-700 dark:text-slate-300">Logo / Ikon Sekolah</label>
+                <p class="text-xs text-slate-400 mb-3">Pilih file gambar (PNG, JPG, JPEG, SVG) untuk mengganti logo di sidebar dan shortcut-icon tab browser.</p>
+                <div class="flex items-center gap-4">
+                    <div class="w-16 h-16 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
+                        @php
+                            $logoPath = $settings['sekolah_logo'] ?? null;
+                            $hasLogo = $logoPath && file_exists(storage_path('app/public/' . $logoPath));
+                        @endphp
+                        @if($hasLogo)
+                            <img src="{{ asset('storage/' . $logoPath) }}" class="w-full h-full object-cover" id="logo-preview">
+                        @else
+                            <div class="w-10 h-10 rounded-xl grid place-items-center bg-gradient-to-br from-primary to-primary-700 text-white" id="logo-preview-placeholder">
+                                <svg viewBox="0 0 24 24" fill="none" class="w-6 h-6 text-white" stroke="currentColor" stroke-width="2.2"><path d="M12 3L1 9l11 6 9-4.91V17M1 9v7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </div>
+                        @endif
+                    </div>
+                    <div class="flex-1">
+                        <input type="file" name="sekolah_logo" accept="image/*" class="text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary hover:file:bg-primary-100 cursor-pointer">
+                        @if($hasLogo)
+                            <div class="mt-1.5">
+                                <label class="inline-flex items-center gap-1.5 text-xs text-rose-600 cursor-pointer">
+                                    <input type="checkbox" name="hapus_logo" value="1" class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"> Hapus Logo (kembali ke default)
+                                </label>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Latar Panel Login: default (gradien biru bawaan), warna polos, atau gambar unggahan
+             dgn fokus/zoom yg bisa diatur (preview live meniru persis rendering di halaman login). --}}
+        @php
+            $loginBgImgPath = $settings['login_bg_image'] ?? null;
+            $loginBgHasImg = $loginBgImgPath && \Illuminate\Support\Facades\Storage::disk('public')->exists($loginBgImgPath);
+            $loginBgImgUrl = $loginBgHasImg ? asset('storage/' . $loginBgImgPath) : null;
+        @endphp
+        <form method="POST" action="{{ route('setting.loginBackground') }}" enctype="multipart/form-data" class="card p-6 space-y-4 mt-5"
+              x-data="loginBgForm({
+                  type: {{ Js::from(old('login_bg_type', $settings['login_bg_type'] ?? 'default')) }},
+                  color: {{ Js::from(old('login_bg_color', $settings['login_bg_color'] ?? '#1e3a8a')) }},
+                  existingUrl: {{ Js::from($loginBgImgUrl) }},
+                  focusX: {{ (float) ($settings['login_bg_focus_x'] ?? 50) }},
+                  focusY: {{ (float) ($settings['login_bg_focus_y'] ?? 50) }},
+                  zoom: {{ (float) ($settings['login_bg_zoom'] ?? 100) }},
+              })">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="image" class="w-4 h-4 text-primary"></i> Latar Panel Login</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">Ganti tampilan panel kiri (biru) di halaman login: pakai gradien bawaan, warna polos, atau unggah gambar sendiri.</p>
+            </div>
+
+            {{-- Pilihan tipe --}}
+            <div class="grid grid-cols-3 gap-2">
+                <label class="cursor-pointer">
+                    <input type="radio" name="login_bg_type" value="default" x-model="type" class="hidden peer">
+                    <div class="border-2 rounded-xl p-3 text-center transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600">
+                        <i data-lucide="sparkles" class="w-4 h-4 mx-auto text-slate-400 mb-1"></i>
+                        <p class="text-xs font-bold text-slate-700 dark:text-slate-200">Default</p>
+                    </div>
+                </label>
+                <label class="cursor-pointer">
+                    <input type="radio" name="login_bg_type" value="color" x-model="type" class="hidden peer">
+                    <div class="border-2 rounded-xl p-3 text-center transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600">
+                        <i data-lucide="palette" class="w-4 h-4 mx-auto text-slate-400 mb-1"></i>
+                        <p class="text-xs font-bold text-slate-700 dark:text-slate-200">Warna Polos</p>
+                    </div>
+                </label>
+                <label class="cursor-pointer">
+                    <input type="radio" name="login_bg_type" value="image" x-model="type" class="hidden peer">
+                    <div class="border-2 rounded-xl p-3 text-center transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600">
+                        <i data-lucide="image" class="w-4 h-4 mx-auto text-slate-400 mb-1"></i>
+                        <p class="text-xs font-bold text-slate-700 dark:text-slate-200">Gambar</p>
+                    </div>
+                </label>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-5 items-start pt-2">
+                {{-- Kontrol kiri --}}
+                <div class="space-y-4">
+                    <div x-show="type==='color'" x-cloak>
+                        <label class="form-label">Warna Latar</label>
+                        <div class="flex items-center gap-3">
+                            <input type="color" x-model="color" class="w-12 h-10 rounded-lg border border-slate-200 dark:border-slate-600 cursor-pointer">
+                            <input type="text" name="login_bg_color" x-model="color" maxlength="7" class="form-input font-mono text-sm" placeholder="#1e3a8a">
+                        </div>
+                    </div>
+
+                    <div x-show="type==='image'" x-cloak class="space-y-4">
+                        <div>
+                            <label class="form-label">Unggah Gambar</label>
+                            <input type="file" name="login_bg_image" accept="image/*" @change="onFile($event)"
+                                   class="text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary hover:file:bg-primary-100 cursor-pointer">
+                            @error('login_bg_image')<p class="text-xs text-rose-500 mt-1">{{ $message }}</p>@enderror
+                            @if($loginBgHasImg)
+                            <label class="inline-flex items-center gap-1.5 text-xs text-rose-600 cursor-pointer mt-2">
+                                <input type="checkbox" name="hapus_login_bg_image" value="1" class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"> Hapus gambar (kembali ke default)
+                            </label>
+                            @endif
+                        </div>
+
+                        <template x-if="previewUrl">
+                            <div class="space-y-3">
+                                <div>
+                                    {{-- Panel login selalu hidden di HP/tablet (cuma tampil di layar desktop, lebar
+                                         setengah layar & tinggi penuh) — pilihan di sini SENGAJA meniru rasio layar
+                                         desktop nyata (~4:5 s.d. persegi), BUKAN bentuk HP potret/lanskap yg tak
+                                         relevan krn panel ini tak pernah muncul di HP sama sekali. --}}
+                                    <label class="form-label text-xs">Bentuk Pratinjau (meniru rasio panel login di layar desktop — cuma bantu pas atur, bukan crop permanen)</label>
+                                    <select x-model="previewAspect" class="form-select py-1.5 text-sm">
+                                        <option value="4/5">Monitor Umum — 4:5 (rekomendasi)</option>
+                                        <option value="1/1">Persegi — 1:1</option>
+                                        <option value="3/4">Monitor Lebar — 3:4</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label text-xs">Geser Horizontal <span x-text="Math.round(focusX)+'%'" class="text-primary font-bold"></span></label>
+                                    <input type="range" name="login_bg_focus_x" x-model.number="focusX" min="0" max="100" step="1" class="w-full accent-primary">
+                                </div>
+                                <div>
+                                    <label class="form-label text-xs">Geser Vertikal <span x-text="Math.round(focusY)+'%'" class="text-primary font-bold"></span></label>
+                                    <input type="range" name="login_bg_focus_y" x-model.number="focusY" min="0" max="100" step="1" class="w-full accent-primary">
+                                </div>
+                                <div>
+                                    <label class="form-label text-xs">Perbesaran (Zoom) <span x-text="Math.round(zoom)+'%'" class="text-primary font-bold"></span></label>
+                                    <input type="range" name="login_bg_zoom" x-model.number="zoom" min="100" max="300" step="5" class="w-full accent-primary">
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="!previewUrl">
+                            <p class="text-xs text-slate-400">Pilih gambar dulu utk mengatur posisi & perbesaran.</p>
+                        </template>
+                    </div>
+
+                    <p x-show="type==='default'" x-cloak class="text-xs text-slate-400">Gradien biru gelap bawaan — tidak ada pengaturan tambahan.</p>
+                </div>
+
+                {{-- Pratinjau live: teknik render-nya SAMA PERSIS dgn halaman login (img +
+                     object-fit:cover, BUKAN background-size:%) — object-fit menghitung crop dari
+                     rasio ASLI gambar, jadi framing-nya konsisten walau bentuk kontainer beda
+                     (kotak pratinjau di sini vs panel asli yg ukurannya ikut layar pengunjung). --}}
+                <div class="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm mx-auto w-full max-w-[220px]"
+                     :style="'aspect-ratio:' + (type==='image' ? previewAspect : '4/5')">
+                    <div class="w-full h-full relative flex items-center justify-center text-white" :style="previewStyle"
+                         :class="type==='default' ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-slate-900' : ''">
+                        <template x-if="type==='image' && previewUrl">
+                            <img :src="previewUrl" class="absolute inset-0 w-full h-full object-cover" :style="imgStyle">
+                        </template>
+                        <template x-if="type==='image' && previewUrl">
+                            <div class="absolute inset-0 bg-gradient-to-br from-black/55 via-black/45 to-black/60"></div>
+                        </template>
+                        <div class="relative z-10 text-center px-3">
+                            <p class="font-black text-sm tracking-tight">SIMS</p>
+                            <p class="text-[9px] text-slate-300 mt-0.5">Pratinjau panel login</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Jenjang Sekolah: menentukan rentang tingkat kelas yang ditawarkan di Data Kelas --}}
+        <form method="POST" action="{{ route('setting.jenjangSekolah') }}" class="card p-6 space-y-4 mt-5">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100">Jenjang Sekolah</h2>
+                <p class="text-xs text-slate-400 mt-1">Menentukan tingkat kelas yang muncul saat menambah/mengubah kelas di menu Data Kelas.</p>
+            </div>
+            @php $jenjangNow = \App\Support\JenjangSekolah::aktif(); @endphp
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                @foreach(\App\Support\JenjangSekolah::JENJANG as $val => $lbl)
+                @php [$min, $max] = \App\Support\JenjangSekolah::RENTANG[$val]; @endphp
+                <label class="cursor-pointer">
+                    <input type="radio" name="jenjang_sekolah" value="{{ $val }}" @checked($jenjangNow===$val) class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="graduation-cap" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">{{ $lbl }}</p>
+                        <p class="text-xs text-slate-400 mt-0.5">Kelas {{ $min }}–{{ $max }}</p>
+                    </div>
+                </label>
+                @endforeach
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Tampilan Antarmuka & Animasi Halaman --}}
+        <form method="POST" action="{{ route('setting.tampilan') }}" class="card p-6 space-y-5 mt-5"
+              x-data="{
+                  tickerOn: {{ ($settings['ticker_bawah_aktif'] ?? '1') == '1' ? 'true' : 'false' }},
+                  fadeOn: {{ ($settings['animasi_fade_aktif'] ?? '1') == '1' ? 'true' : 'false' }}
+              }">
+            @csrf
+            <input type="hidden" name="tab" value="sekolah">
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                    <i data-lucide="layout-template" class="w-5 h-5 text-primary"></i>
+                    Tampilan Antarmuka &amp; Animasi
+                </h2>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Sesuaikan elemen antarmuka sistem dan animasi transisi halaman untuk kenyamanan visual serta performa.
+                </p>
+            </div>
+
+            <div class="space-y-4 divide-y divide-slate-100 dark:divide-slate-800">
+                {{-- Toggle Ticker SIMS-NET Bawah --}}
+                <div class="flex items-start justify-between gap-4 pt-2">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                            <i data-lucide="activity" class="w-4 h-4 text-emerald-500"></i>
+                            Ticker Statistik Berjalan (SIMS-NET)
+                        </p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                            Menampilkan bilah teks berjalan (running ticker) di bagian paling bawah layar yang memuat data statistik sekolah secara realtime.
+                        </p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                        <input type="checkbox" name="ticker_bawah_aktif" value="1" class="hidden peer" x-model="tickerOn">
+                        <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                    </label>
+                </div>
+
+                {{-- Toggle Animasi Fade-In Reload --}}
+                <div class="flex items-start justify-between gap-4 pt-4">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                            <i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i>
+                            Animasi Transisi Halaman (Fade-In)
+                        </p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                            Efek transisi fade-in saat berpindah atau memuat ulang halaman. Matikan opsi ini jika Anda menginginkan halaman tampil instan tanpa jeda animasi transisi.
+                        </p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                        <input type="checkbox" name="animasi_fade_aktif" value="1" class="hidden peer" x-model="fadeOn">
+                        <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                    </label>
+                </div>
+            </div>
+
+            <div class="pt-2">
+                <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2">
+                    <i data-lucide="save" class="w-4 h-4"></i> Simpan Pengaturan
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {{-- Media Sosial --}}
+    <div x-show="tab==='sosmed'" x-transition>
+        <form method="POST" action="{{ route('setting.mediaSosial') }}" class="card p-6 space-y-5"
+              x-data="{ master: {{ ($settings['sosmed_aktif'] ?? '1')=='1' ? 'true' : 'false' }} }">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="share-2" class="w-4 h-4 text-primary"></i> Media Sosial Sekolah</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">Cukup tempel tautan — platform otomatis aktif dan ikonnya muncul di dashboard semua pengguna. Kosongkan tautan (atau matikan toggle) untuk menyembunyikan. <span class="font-semibold text-amber-600 dark:text-amber-400">Ikon tidak akan tampil bila tautan kosong.</span></p>
+            </div>
+
+            {{-- Master toggle: tampilkan di dashboard --}}
+            <div class="flex items-start justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Tampilkan di Dashboard</p>
+                    <p class="text-xs mt-1 font-semibold" :class="master ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="master ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="sosmed_aktif" value="1" class="hidden peer" x-model="master">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+
+            {{-- Daftar platform --}}
+            <div class="space-y-3" :class="master ? '' : 'opacity-50 pointer-events-none'">
+                @foreach(config('sosmed') as $key => $meta)
+                @php $urlVal = old('sosmed_'.$key.'_url', $settings['sosmed_'.$key.'_url'] ?? ''); @endphp
+                <div class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2.5"
+                     x-data="{ url: @js($urlVal), on: {{ ($settings['sosmed_'.$key.'_on'] ?? '0')=='1' ? 'true' : 'false' }} }">
+                    <span class="grid place-items-center w-9 h-9 rounded-lg bg-primary/10 text-primary flex-shrink-0">
+                        @include('partials.sosmed-icon', ['key' => $key, 'cls' => 'w-4 h-4'])
+                    </span>
+                    <div class="flex-1 min-w-0">
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">{{ $meta['label'] }}</label>
+                        <input type="text" name="sosmed_{{ $key }}_url" x-model="url"
+                               @input="if (url.trim() !== '') on = true"
+                               placeholder="{{ $meta['ph'] }}" class="form-input mt-0.5 py-1.5 text-sm">
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer flex-shrink-0" title="Tampilkan di dashboard">
+                        <input type="checkbox" name="sosmed_{{ $key }}_on" value="1" class="hidden peer" x-model="on">
+                        <div class="relative w-9 h-5 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition peer-checked:after:translate-x-4"></div>
+                    </label>
+                </div>
+                @endforeach
+            </div>
+
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+    </div>
+
+    {{-- Unduh Aplikasi (APK Android + Installer Windows) --}}
+    <div x-show="tab==='aplikasi'" x-transition>
+        <form method="POST" action="{{ route('setting.appDownload') }}" enctype="multipart/form-data" class="card p-6 space-y-5"
+              x-data="{ on: {{ ($settings['app_download_aktif'] ?? '0')=='1' ? 'true' : 'false' }} }">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="smartphone" class="w-4 h-4 text-primary"></i> Unduh Aplikasi</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">Unggah aplikasi Android (.apk) dan/atau Installer Windows (.exe/.msi). Bila diaktifkan, menu <b>“Unduh Aplikasi”</b> muncul di sidebar untuk semua pengguna. File disimpan privat & hanya bisa diunduh pengguna yang login.</p>
+            </div>
+
+            {{-- Master toggle --}}
+            <div class="flex items-start justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Aktifkan Menu Unduh Aplikasi</p>
+                    <p class="text-xs mt-1 font-semibold" :class="on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="on ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="app_download_aktif" value="1" class="hidden peer" x-model="on">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+
+            @php
+                $apkPath = $settings['app_apk_path'] ?? null;
+                $apkOk   = $apkPath && \Illuminate\Support\Facades\Storage::disk('local')->exists($apkPath);
+                $winPath = $settings['app_windows_path'] ?? null;
+                $winOk   = $winPath && \Illuminate\Support\Facades\Storage::disk('local')->exists($winPath);
+                $fmt = fn ($b) => $b >= 1048576 ? round($b/1048576, 1).' MB' : round($b/1024).' KB';
+            @endphp
+
+            {{-- APK Android --}}
+            <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                <div class="flex items-center gap-2">
+                    <span class="grid place-items-center w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-600 flex-shrink-0"><i data-lucide="smartphone" class="w-4 h-4"></i></span>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Aplikasi Android (.apk)</p>
+                        @if($apkOk)
+                            <p class="text-xs text-emerald-600 dark:text-emerald-400 truncate">✓ {{ $settings['app_apk_name'] ?? basename($apkPath) }} ({{ $fmt(\Illuminate\Support\Facades\Storage::disk('local')->size($apkPath)) }})</p>
+                        @else
+                            <p class="text-xs text-slate-400">Belum ada file diunggah.</p>
+                        @endif
+                    </div>
+                </div>
+                <input type="file" name="app_apk" accept=".apk" class="text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary hover:file:bg-primary-100 cursor-pointer">
+                @error('app_apk')<p class="text-xs text-rose-500">{{ $message }}</p>@enderror
+                <div class="flex flex-wrap items-center gap-4">
+                    <div class="flex-1 min-w-40">
+                        <label class="form-label text-xs">Label Versi (opsional)</label>
+                        <input type="text" name="app_apk_version" value="{{ old('app_apk_version', $settings['app_apk_version'] ?? '') }}" placeholder="mis. v1.2.0" class="form-input py-1.5 text-sm">
+                    </div>
+                    @if($apkOk)
+                    <label class="inline-flex items-center gap-1.5 text-xs text-rose-600 cursor-pointer mt-4">
+                        <input type="checkbox" name="hapus_app_apk" value="1" class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"> Hapus APK
+                    </label>
+                    @endif
+                </div>
+            </div>
+
+            {{-- Installer Windows --}}
+            <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                <div class="flex items-center gap-2">
+                    <span class="grid place-items-center w-9 h-9 rounded-lg bg-sky-500/10 text-sky-600 flex-shrink-0"><i data-lucide="monitor" class="w-4 h-4"></i></span>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Installer Windows (.exe / .msi)</p>
+                        @if($winOk)
+                            <p class="text-xs text-sky-600 dark:text-sky-400 truncate">✓ {{ $settings['app_windows_name'] ?? basename($winPath) }} ({{ $fmt(\Illuminate\Support\Facades\Storage::disk('local')->size($winPath)) }})</p>
+                        @else
+                            <p class="text-xs text-slate-400">Belum ada file diunggah.</p>
+                        @endif
+                    </div>
+                </div>
+                <input type="file" name="app_windows" accept=".exe,.msi" class="text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-primary-50 file:text-primary hover:file:bg-primary-100 cursor-pointer">
+                @error('app_windows')<p class="text-xs text-rose-500">{{ $message }}</p>@enderror
+                <div class="flex flex-wrap items-center gap-4">
+                    <div class="flex-1 min-w-40">
+                        <label class="form-label text-xs">Label Versi (opsional)</label>
+                        <input type="text" name="app_windows_version" value="{{ old('app_windows_version', $settings['app_windows_version'] ?? '') }}" placeholder="mis. v1.2.0" class="form-input py-1.5 text-sm">
+                    </div>
+                    @if($winOk)
+                    <label class="inline-flex items-center gap-1.5 text-xs text-rose-600 cursor-pointer mt-4">
+                        <input type="checkbox" name="hapus_app_windows" value="1" class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"> Hapus Installer
+                    </label>
+                    @endif
+                </div>
+            </div>
+
+            <p class="text-xs text-amber-600 dark:text-amber-400 leading-relaxed"><i data-lucide="triangle-alert" class="w-3.5 h-3.5 inline -mt-0.5"></i> Batas unggah server saat ini <b>{{ ini_get('upload_max_filesize') }}</b>. Bila APK/installer lebih besar, minta admin server menaikkan <code>upload_max_filesize</code> &amp; <code>post_max_size</code> di php.ini.</p>
+
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+    </div>
+
+    {{-- Integrasi Nalar Guru --}}
+    <div x-show="tab==='integrasi'" x-transition>
+        <form method="POST" action="{{ route('setting.integrasi') }}" class="card p-6 space-y-5"
+              x-data="{
+                  on: {{ ($settings['tp_launcher_aktif'] ?? '1')=='1' ? 'true' : 'false' }},
+                  canvaOn: {{ ($settings['canva_connect_aktif'] ?? '1')=='1' ? 'true' : 'false' }}
+              }">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="plug" class="w-4 h-4 text-primary"></i> Integrasi Asisten Guru</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">Launcher Nalar Guru dan Canva Pendidikan (gratis via belajar.id).</p>
+            </div>
+
+            <div class="flex items-start justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Tampilkan launcher di Asisten Guru</p>
+                    <p class="text-xs text-slate-400 mt-0.5">Tombol cepat ke Nalar Guru di Asisten Guru.</p>
+                    <p class="text-xs mt-1.5 font-semibold" :class="on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="on ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="tp_launcher_aktif" value="1" class="hidden peer" x-model="on">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+
+            <div class="flex items-start justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Canva Connect (belajar.id)</p>
+                    <p class="text-xs text-slate-400 mt-0.5">Izinkan guru menghubungkan Canva Pendidikan gratis. Hanya email belajar.id.</p>
+                    <p class="text-xs mt-1.5 font-semibold" :class="canvaOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="canvaOn ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="canva_connect_aktif" value="1" class="sr-only peer" x-model="canvaOn">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+
+            <div>
+                <label class="form-label">Domain email Canva yang diizinkan</label>
+                <input type="text" name="canva_allowed_email_suffix" value="{{ $settings['canva_allowed_email_suffix'] ?? '.belajar.id' }}"
+                       class="form-input font-mono text-sm" placeholder=".belajar.id">
+                <p class="text-[11px] text-slate-400 mt-1">Wajib berakhiran <code>.belajar.id</code>. Contoh: <code>.belajar.id</code> atau <code>@smpn1.belajar.id</code>. Domain lain ditolak.</p>
+            </div>
+
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2">
+                <i data-lucide="save" class="w-4 h-4"></i> Simpan Integrasi
+            </button>
+        </form>
+    </div>
+
+    {{-- Semester --}}
+    <div x-show="tab==='semester'" x-transition class="space-y-4">
+        <div class="card p-6 space-y-4">
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Semester Aktif</h2>
+            <form method="POST" action="{{ route('setting.semester') }}" class="flex flex-wrap gap-3 items-end">
+                @csrf
+                <div class="flex-1 min-w-48">
+                    <label class="form-label">Pilih Semester Aktif</label>
+                    <select name="semester_id" class="form-select">
+                        @foreach($semester as $s)
+                        <option value="{{ $s->id }}" @selected($s->aktif)>Semester {{ $s->semester }} — {{ $s->tahun }}</option>
+                        @endforeach
+                    </select>
+                </div>
+                <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold">Set Aktif</button>
+            </form>
+        </div>
+        <div class="card p-6 space-y-4">
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Tambah Semester</h2>
+            <form method="POST" action="{{ route('setting.semester.store') }}" class="flex flex-wrap gap-3 items-end">
+                @csrf
+                <div>
+                    <label class="form-label">Semester</label>
+                    <select name="semester" class="form-select">
+                        <option value="1">Ganjil (1)</option>
+                        <option value="2">Genap (2)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">Tahun Ajaran</label>
+                    <input type="text" name="tahun" placeholder="2024/2025" class="form-input">
+                </div>
+                <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold">Tambah</button>
+            </form>
+        </div>
+    </div>
+
+    {{-- Penilaian --}}
+    <div x-show="tab==='penilaian'" x-transition>
+        <form method="POST" action="{{ route('setting.rumusRapor') }}" class="card p-6 space-y-4">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100">Rumus Perhitungan Nilai Rapor</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Pilih metode perhitungan nilai rapor akhir siswa secara universal di satu tempat saja.</p>
+            </div>
+            <div class="space-y-1.5">
+                <label class="form-label">Metode Perhitungan Rapor</label>
+                <select name="rumus_rapor" class="form-select">
+                    @foreach(\App\Support\Penilaian::RUMUS as $key => $label)
+                        <option value="{{ $key }}" @selected(($settings['rumus_rapor'] ?? 'bagi4') === $key)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan Rumus Rapor</button>
+        </form>
+
+        {{-- Wali kelas boleh lihat nilai mapel lain di kelasnya --}}
+        <form method="POST" action="{{ route('setting.walikelasLihatNilai') }}" class="card p-6"
+              x-data="{ on: {{ ($settings['walikelas_lihat_nilai'] ?? '0')=='1' ? 'true' : 'false' }} }">
+            @csrf
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="eye" class="w-4 h-4 text-sky-500"></i> Wali Kelas Lihat Nilai Mapel Lain</h2>
+                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Jika aktif, wali kelas bisa <b>melihat (tanpa mengubah)</b> nilai Formatif, Sumatif, dan PAS semua mata pelajaran di kelasnya — bukan hanya mapel yang ia ajar sendiri.</p>
+                    <p class="text-xs mt-2 font-semibold" :class="on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="on ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="walikelas_lihat_nilai" value="1" class="hidden peer" x-model="on" @change="$el.form.submit()">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+        </form>
+
+        <a href="{{ route('setting.penjabaran') }}" class="card p-6 flex items-center justify-between gap-3 hover:border-primary transition">
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="list-tree" class="w-[18px] h-[18px] text-primary"></i> Nilai Penjabaran</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Atur mata pelajaran yang punya nilai penjabaran &amp; komponen nilainya (mis. B. Inggris: Listening, Speaking, Reading, Writing).</p>
+            </div>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-slate-400 flex-shrink-0"></i>
+        </a>
+
+        <a href="{{ route('setting.kopRapor') }}" class="card p-6 flex items-center justify-between gap-3 hover:border-primary transition">
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="stamp" class="w-[18px] h-[18px] text-primary"></i> Kop Surat, Judul &amp; Tanda Tangan Rapor</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Upload logo (kiri &amp; kanan), ubah teks kop, backdrop, judul rapor, serta tanda tangan kepala sekolah &amp; wali kelas untuk distribusi online.</p>
+            </div>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-slate-400 flex-shrink-0"></i>
+        </a>
+
+
+        <form method="POST" action="{{ route('setting.tpRange') }}" class="card p-6 space-y-4">
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="list-checks" class="w-[18px] h-[18px] text-primary"></i> Batas Tujuan Pembelajaran per Materi</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Tentukan jumlah minimal &amp; maksimal TP yang boleh ditambahkan guru di tiap materi. Isi <b>0</b> untuk tanpa batas.</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <div class="space-y-1.5">
+                    <label class="form-label">Minimal TP</label>
+                    <input type="number" name="tp_min" min="0" max="50" value="{{ $settings['tp_min'] ?? 0 }}" class="form-input w-28">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="form-label">Maksimal TP</label>
+                    <input type="number" name="tp_max" min="0" max="50" value="{{ $settings['tp_max'] ?? 0 }}" class="form-input w-28">
+                </div>
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan Batas TP</button>
+        </form>
+    </div>
+
+    {{-- Absensi --}}
+    <div x-show="tab==='absensi'" x-transition class="space-y-4">
+        <form method="POST" action="{{ route('setting.caraAbsensi') }}" class="card p-6 space-y-4">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Cara Absensi (Guru &amp; Siswa)</h2>
+            <p class="text-xs text-slate-400 -mt-1">Pilih metode absen mandiri. Metode yang tidak dipilih <span class="font-semibold">dikunci</span> untuk guru &amp; siswa — kecuali "Wajah + Barcode/QR" dipilih, keduanya aktif bersamaan. Admin tetap bisa <span class="font-semibold">mengoreksi manual</span> kapan saja.</p>
+            @php $caraNow = in_array($settings['cara_absensi_guru'] ?? 'wajah', ['wajah','barcode','keduanya']) ? ($settings['cara_absensi_guru'] ?? 'wajah') : 'wajah'; @endphp
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                @foreach(['wajah'=>['Scan Wajah','Pengenalan wajah (kiosk)','scan-face'],'barcode'=>['Barcode / QR','Scan QR Code','qr-code'],'keduanya'=>['Wajah + Barcode/QR','Kedua metode aktif sekaligus','scan-eye']] as $val => [$lbl,$desc,$icon])
+                <label class="cursor-pointer">
+                    <input type="radio" name="cara_absensi" value="{{ $val }}" @checked($caraNow===$val) class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="{{ $icon }}" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">{{ $lbl }}</p>
+                        <p class="text-xs text-slate-400 mt-0.5">{{ $desc }}</p>
+                    </div>
+                </label>
+                @endforeach
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Mode kamera halaman Scan Absensi --}}
+        <form method="POST" action="{{ route('setting.scanKioskMode') }}" class="card p-6 space-y-4">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Kamera Halaman Scan Absensi</h2>
+            <p class="text-xs text-slate-400 -mt-1">Tentukan apa yang dibaca kamera di halaman Scan Absensi: wajah, QR kartu pelajar, atau keduanya sekaligus dalam satu kamera.</p>
+            @php $scanKioskNow = in_array($settings['scan_kiosk_mode'] ?? 'keduanya', ['wajah','qr','keduanya']) ? ($settings['scan_kiosk_mode'] ?? 'keduanya') : 'keduanya'; @endphp
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                @foreach([
+                    'wajah'    => ['Wajah saja', 'Kamera hanya mengenali wajah', 'scan-face'],
+                    'qr'       => ['QR kartu saja', 'Kamera hanya membaca QR kartu pelajar', 'qr-code'],
+                    'keduanya' => ['Wajah + QR', 'Satu kamera membaca wajah dan QR kartu', 'scan-eye'],
+                ] as $val => [$lbl,$desc,$icon])
+                <label class="cursor-pointer">
+                    <input type="radio" name="scan_kiosk_mode" value="{{ $val }}" @checked($scanKioskNow===$val) class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="{{ $icon }}" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">{{ $lbl }}</p>
+                        <p class="text-xs text-slate-400 mt-0.5">{{ $desc }}</p>
+                    </div>
+                </label>
+                @endforeach
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Wajib Daftar Wajah saat Login Pertama --}}
+        <form method="POST" action="{{ route('setting.wajibDaftarWajah') }}" class="card p-6 space-y-4"
+              x-data="{ on: {{ (($settings['wajib_daftar_wajah'] ?? '1') === '1') ? 'true' : 'false' }} }">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Wajib Daftar Wajah</h2>
+            <p class="text-xs text-slate-400 -mt-1">Kalau aktif, semua orang (kecuali orang tua) dipaksa mendaftarkan wajah dulu sebelum bisa memakai fitur lain — biasanya saat login pertama kali. Kalau dimatikan, daftar wajah jadi sukarela lewat menu Wajah Saya; scan absensi wajah tetap butuh wajah terdaftar utk yang memilih daftar.</p>
+            <div class="flex items-start justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3">
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Paksa daftar wajah sebelum akses fitur lain</p>
+                    <p class="text-xs mt-1.5 font-semibold" :class="on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="on ? '● Wajib' : '○ Tidak wajib'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="wajib_daftar_wajah" value="1" class="hidden peer" x-model="on">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Mesin Pengenalan Wajah (percobaan) --}}
+        <form method="POST" action="{{ route('setting.faceEngine') }}" class="card p-6 space-y-4">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100">Mesin Pengenalan Wajah</h2>
+            <p class="text-xs text-slate-400 -mt-1">InsightFace (ArcFace) berpotensi lebih akurat, tapi wajib diuji langsung dgn kamera sungguhan sebelum dipakai serius. Data wajah kedua mesin tersimpan TERPISAH — pindah ke sini atau balik ke Human.js tidak pernah menghapus wajah yang sudah terdaftar.</p>
+            @php $faceEngineNow = \App\Support\FaceEngine::aktif(); @endphp
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                @foreach(\App\Support\FaceEngine::ENGINES as $val => $lbl)
+                <label class="cursor-pointer">
+                    <input type="radio" name="face_engine" value="{{ $val }}" @checked($faceEngineNow===$val) class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="{{ $val==='insightface' ? 'flask-conical' : 'scan-face' }}" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">{{ $lbl }}</p>
+                    </div>
+                </label>
+                @endforeach
+            </div>
+            <button type="submit" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+        </form>
+
+        {{-- Zona Berbahaya: reset verifikasi wajah massal — sekali klik, SEMUA siswa & guru
+             (utk mesin yg sedang aktif saja) wajib daftar ulang wajah lewat EnsureFaceRegistered
+             sebelum bisa lanjut memakai aplikasi. Data mesin yg TIDAK aktif tidak ikut terhapus. --}}
+        <div class="card p-6 space-y-4 border-2 border-rose-200 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-900/10">
+            <div>
+                <h2 class="font-bold text-rose-700 dark:text-rose-300 flex items-center gap-2"><i data-lucide="alert-triangle" class="w-4 h-4"></i> Reset Verifikasi Wajah Massal</h2>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                    Menghapus data wajah SEMUA siswa & guru sekaligus, hanya untuk mesin yang sedang aktif (<b>{{ \App\Support\FaceEngine::ENGINES[$faceEngineNow] ?? $faceEngineNow }}</b>). Setelah direset, semua orang WAJIB mendaftar ulang wajah sebelum bisa mengakses fitur lain di aplikasi. Data mesin lain (kalau ada) tidak ikut terhapus. Tindakan ini tidak bisa dibatalkan.
+                </p>
+            </div>
+            <p class="text-sm text-slate-600 dark:text-slate-300">
+                Saat ini <b class="text-rose-600 dark:text-rose-400">{{ $siswaFaceTerdaftar }}</b> siswa &amp; <b class="text-rose-600 dark:text-rose-400">{{ $guruFaceTerdaftar }}</b> guru terdaftar wajahnya — semuanya akan direset.
+            </p>
+            <form method="POST" action="{{ route('setting.faceResetAll') }}"
+                  onsubmit="return confirmAction(this, 'Reset wajah SEMUA siswa & guru ({{ $siswaFaceTerdaftar }} siswa + {{ $guruFaceTerdaftar }} guru, mesin {{ \App\Support\FaceEngine::ENGINES[$faceEngineNow] ?? $faceEngineNow }})? Mereka wajib daftar ulang wajah sebelum bisa memakai aplikasi lagi. Tindakan ini TIDAK BISA dibatalkan.', 'red')">
+                @csrf
+                <button type="submit" class="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700 transition">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Reset Semua Verifikasi Wajah
+                </button>
+            </form>
+        </div>
+
+        {{-- Link Kiosk Absensi --}}
+        <div class="card p-6 space-y-3" x-data="{ copied:false, url:'{{ $settings['kiosk_token'] ?? '' ? url('/kiosk-absensi/'.$settings['kiosk_token']) : '' }}',
+            copy(){ navigator.clipboard.writeText(this.url); this.copied=true; setTimeout(()=>this.copied=false,1800); } }">
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="monitor-smartphone" class="w-4 h-4 text-primary"></i> Link Kiosk Absensi</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">Link rahasia tanpa perlu login — buka langsung Scan Wajah/QR sesuai metode aktif di atas. Jadikan shortcut di komputer meja piket supaya guru bisa langsung absen sendiri.</p>
+            </div>
+            @if($settings['kiosk_token'] ?? null)
+            <div class="flex flex-wrap items-center gap-2">
+                <input type="text" readonly :value="url" onclick="this.select()" class="form-input flex-1 min-w-64 font-mono text-xs">
+                <button type="button" @click="copy()" class="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">
+                    <i data-lucide="copy" class="w-4 h-4" x-show="!copied"></i>
+                    <i data-lucide="check" class="w-4 h-4 text-emerald-500" x-show="copied" x-cloak></i>
+                    <span x-text="copied ? 'Tersalin' : 'Salin Link'"></span>
+                </button>
+            </div>
+            @endif
+            <form method="POST" action="{{ route('setting.kioskToken.regenerate') }}" onsubmit="return confirmAction(this, '{{ ($settings['kiosk_token'] ?? null) ? 'Buat ulang link kiosk? Link lama tidak akan berlaku lagi.' : 'Buat link kiosk absensi?' }}', 'orange')">
+                @csrf
+                <button class="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold border border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:hover:bg-amber-900/30">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> {{ ($settings['kiosk_token'] ?? null) ? 'Buat Ulang Link' : 'Buat Link Kiosk' }}
+                </button>
+            </form>
+        </div>
+
+        {{-- Wajib isi agenda sebelum absen pulang --}}
+        <form method="POST" action="{{ route('setting.agendaWajibPulang') }}" class="card p-6"
+              x-data="{ on: {{ ($settings['agenda_wajib_pulang'] ?? '1')=='1' ? 'true' : 'false' }} }">
+            @csrf
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="clipboard-pen-line" class="w-4 h-4 text-amber-500"></i> Wajib Isi Agenda Sebelum Pulang</h2>
+                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Jika aktif, guru tidak dapat absen pulang (scan wajah maupun QR) sebelum seluruh agenda mengajar hari itu diisi.</p>
+                    <p class="text-xs mt-2 font-semibold" :class="on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'" x-text="on ? '● Aktif' : '○ Nonaktif'"></p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                    <input type="checkbox" name="agenda_wajib_pulang" value="1" class="hidden peer" x-model="on" @change="$el.form.submit()">
+                    <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                </label>
+            </div>
+        </form>
+
+        <div class="grid sm:grid-cols-2 gap-4">
+            <form method="POST" action="{{ route('setting.poinTerlambat') }}" class="card p-6 space-y-3">
+                @csrf
+                <h2 class="font-bold text-slate-800 dark:text-slate-100">Poin Terlambat</h2>
+                <div class="flex gap-3 items-end">
+                    <div class="flex-1">
+                        <label class="form-label">Poin dikurangi</label>
+                        <input type="number" name="poin_terlambat" value="{{ $settings['poin_terlambat'] ?? 5 }}" class="form-input">
+                    </div>
+                    <button type="submit" class="btn-primary px-4 py-2.5 rounded-xl text-sm font-bold">OK</button>
+                </div>
+            </form>
+            <form method="POST" action="{{ route('setting.waktuTerlambat') }}" class="card p-6 space-y-3">
+                @csrf
+                <h2 class="font-bold text-slate-800 dark:text-slate-100">Batas Jam Terlambat</h2>
+                <p class="text-xs text-slate-400 -mt-1">Hadir setelah jam ini dihitung <span class="font-semibold text-rose-500">Terlambat</span>.</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">Siswa</label>
+                        <input type="time" name="waktu_terlambat" value="{{ $settings['waktu_terlambat'] ?? '07:30' }}" class="form-input">
+                    </div>
+                    <div>
+                        <label class="form-label">Guru</label>
+                        <input type="time" name="waktu_terlambat_guru" value="{{ $settings['waktu_terlambat_guru'] ?? ($settings['waktu_terlambat'] ?? '07:30') }}" class="form-input">
+                    </div>
+                </div>
+                <button type="submit" class="btn-primary px-4 py-2.5 rounded-xl text-sm font-bold w-full">Simpan</button>
+            </form>
+        </div>
+
+        <div class="card p-6" x-data="qrLokasi({
+            lat:@js($settings['sekolah_lat'] ?? ''),
+            lng:@js($settings['sekolah_lng'] ?? ''),
+            points:@js(json_decode($settings['sekolah_geo_points'] ?? '[]', true) ?: [])
+        })" x-init="init()">
+            <div class="flex items-center gap-3 mb-5 pb-5 border-b border-slate-100 dark:border-slate-700">
+                <div class="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center text-primary shrink-0"><span x-ignore><i data-lucide="map-pin" class="w-5 h-5"></i></span></div>
+                <div>
+                    <h2 class="font-bold text-slate-800 dark:text-slate-100">Lokasi & Absen QR</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">Pin utama + titik tambahan (gerbang, lapangan, aula). Absen lolos jika dekat salah satu titik.</p>
+                </div>
+                <div class="flex items-center gap-3 ml-auto">
+                    <a href="{{ route('qr.absensi') }}" class="text-xs text-primary font-semibold flex items-center gap-1"><span x-ignore><i data-lucide="qr-code" class="w-3.5 h-3.5"></i></span> Lihat QR</a>
+                    <a href="{{ route('qr.cetak') }}" target="_blank" class="text-xs text-primary font-semibold flex items-center gap-1"><span x-ignore><i data-lucide="printer" class="w-3.5 h-3.5"></i></span> Cetak QR</a>
+                </div>
+            </div>
+            <form method="POST" action="{{ route('setting.lokasiQr') }}" class="space-y-4">
+                @csrf
+                <input type="hidden" name="sekolah_geo_points" :value="JSON.stringify(points)">
+                <div class="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 z-0">
+                    <div id="setMap" x-ignore style="height:280px"></div>
+                    <div class="absolute top-3 right-3 z-[1000] flex rounded-lg overflow-hidden shadow-md border border-white/40 bg-white/95 dark:bg-slate-800/95 text-xs font-bold">
+                        <button type="button" @click="setBase('street')"
+                            :class="baseMode==='street' ? 'bg-primary text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'"
+                            class="px-3 py-1.5 transition">Peta</button>
+                        <button type="button" @click="setBase('satellite')"
+                            :class="baseMode==='satellite' ? 'bg-primary text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'"
+                            class="px-3 py-1.5 transition">Satelit</button>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-400">
+                    Klik peta untuk menetapkan <span class="font-semibold" x-text="addMode ? 'titik tambahan baru' : 'pin utama'"></span>.
+                    Pakai <span class="font-semibold">Satelit</span> agar pin jatuh tepat di gerbang/gedung. Idealnya diukur di luar ruangan.
+                </p>
+                <p x-show="pinAccuracy!==null" x-cloak class="text-xs font-medium" :class="pinAccuracy<=50 ? 'text-emerald-600' : (pinAccuracy<=100 ? 'text-amber-600' : 'text-rose-600')">
+                    Akurasi GPS pin: ±<span x-text="Math.round(pinAccuracy)"></span> m
+                    <span x-show="pinAccuracy>80"> — disarankan ulangi di tempat lebih terbuka sebelum menyimpan.</span>
+                </p>
+                <div class="grid sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="form-label">Latitude (utama)</label>
+                        <input type="text" name="sekolah_lat" x-model="lat" class="form-input font-mono" placeholder="-0.917">
+                    </div>
+                    <div>
+                        <label class="form-label">Longitude (utama)</label>
+                        <input type="text" name="sekolah_lng" x-model="lng" class="form-input font-mono" placeholder="104.46">
+                    </div>
+                    <div>
+                        <label class="form-label">Radius utama (meter)</label>
+                        <input type="number" name="absen_radius" value="{{ $settings['absen_radius'] ?? 200 }}" min="10" max="5000" class="form-input">
+                        <p class="text-[11px] text-slate-400 mt-1">Default 200 m. Titik tambahan bisa punya radius sendiri.</p>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <div>
+                            <p class="text-sm font-bold text-slate-700 dark:text-slate-200">Titik tambahan</p>
+                            <p class="text-xs text-slate-400">Mis. Gerbang belakang, lapangan, aula — maks 8 titik.</p>
+                        </div>
+                        <button type="button" @click="toggleAddMode()"
+                            class="text-xs font-bold px-3 py-1.5 rounded-lg border transition"
+                            :class="addMode ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 dark:border-slate-600 text-slate-600'">
+                            <span x-text="addMode ? 'Mode: klik peta = titik baru (aktif)' : 'Mode: tambah titik dari peta'"></span>
+                        </button>
+                    </div>
+                    <template x-if="points.length===0">
+                        <p class="text-xs text-slate-400">Belum ada titik tambahan. Aktifkan mode di atas lalu klik peta.</p>
+                    </template>
+                    <template x-for="(p, idx) in points" :key="idx">
+                        <div class="grid sm:grid-cols-12 gap-2 items-end">
+                            <div class="sm:col-span-3">
+                                <label class="form-label">Label</label>
+                                <input type="text" x-model="p.label" class="form-input text-sm" maxlength="40" placeholder="Gerbang">
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label class="form-label">Lat</label>
+                                <input type="text" x-model="p.lat" class="form-input font-mono text-sm" @change="redrawExtra()">
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label class="form-label">Lng</label>
+                                <input type="text" x-model="p.lng" class="form-input font-mono text-sm" @change="redrawExtra()">
+                            </div>
+                            <div class="sm:col-span-3">
+                                <label class="form-label">Radius (opsional)</label>
+                                <input type="number" x-model="p.radius" min="10" max="1000" class="form-input text-sm" placeholder="ikuti utama" @change="redrawExtra()">
+                                <p class="text-[11px] text-slate-400 mt-1">Kosong = ikut radius utama. Maks 1000 m.</p>
+                            </div>
+                            <div class="sm:col-span-2">
+                                <button type="button" @click="removePoint(idx)" class="w-full py-2.5 rounded-lg text-xs font-bold text-rose-600 border border-rose-200 hover:bg-rose-50">Hapus</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                    <p class="text-sm font-bold text-slate-700 dark:text-slate-200">Zona longgar jam sibuk</p>
+                    <p class="text-xs text-slate-400 -mt-1">Tambah meter ke radius hanya pada jam masuk pagi (GPS indoor sering melenceng).</p>
+                    <div class="grid sm:grid-cols-3 gap-3">
+                        <div>
+                            <label class="form-label">Bonus (meter)</label>
+                            <input type="number" name="absen_rush_bonus" value="{{ $settings['absen_rush_bonus'] ?? 100 }}" min="0" max="500" class="form-input">
+                            <p class="text-[11px] text-slate-400 mt-1">0 = nonaktif. Rekomendasi 80–120.</p>
+                        </div>
+                        <div>
+                            <label class="form-label">Mulai</label>
+                            <input type="time" name="absen_rush_start" value="{{ $settings['absen_rush_start'] ?? '06:30' }}" class="form-input">
+                        </div>
+                        <div>
+                            <label class="form-label">Selesai</label>
+                            <input type="time" name="absen_rush_end" value="{{ $settings['absen_rush_end'] ?? '07:45' }}" class="form-input">
+                        </div>
+                    </div>
+                </div>
+
+                {{-- Mode QR: harian (otomatis berganti) atau tetap (satu QR permanen, cocok utk dicetak & ditempel) --}}
+                <div>
+                    <label class="form-label">Mode QR Absensi</label>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label class="cursor-pointer">
+                            <input type="radio" name="qr_absensi_mode" value="harian" @checked(($settings['qr_absensi_mode'] ?? 'harian') == 'harian') class="hidden peer">
+                            <div class="border-2 rounded-xl p-3.5 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                                <p class="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-1.5"><span x-ignore><i data-lucide="refresh-cw" class="w-4 h-4 text-slate-400"></i></span> Ganti Setiap Hari</p>
+                                <p class="text-xs text-slate-400 mt-1">QR otomatis berubah tiap hari — lebih aman dari QR lama yang difoto/disebarluaskan. Cetak/tampilkan ulang tiap pagi.</p>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer">
+                            <input type="radio" name="qr_absensi_mode" value="tetap" @checked(($settings['qr_absensi_mode'] ?? 'harian') == 'tetap') class="hidden peer">
+                            <div class="border-2 rounded-xl p-3.5 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                                <p class="font-bold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-1.5"><span x-ignore><i data-lucide="pin" class="w-4 h-4 text-slate-400"></i></span> Satu QR Tetap</p>
+                                <p class="text-xs text-slate-400 mt-1">QR sama setiap hari — cetak sekali, tempel permanen. Buat ulang manual kalau dicurigai bocor.</p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <button type="button" @click="useMyLocation()" :disabled="locating" class="text-sm font-semibold text-primary flex items-center gap-1.5 disabled:opacity-50">
+                        <i data-lucide="locate-fixed" class="w-4 h-4" :class="locating ? 'animate-spin' : ''"></i>
+                        <span x-text="locating ? 'Menyempurnakan GPS…' : 'Gunakan lokasi saya sekarang'"></span>
+                    </button>
+                    <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                        <input type="checkbox" name="qr_absensi_aktif" value="1" @checked(($settings['qr_absensi_aktif'] ?? '1')=='1') class="accent-[color:var(--cp)] w-4 h-4"> Aktifkan Absen QR
+                    </label>
+                </div>
+                <div class="border-t border-slate-100 dark:border-slate-700 pt-3">
+                    <label class="flex items-start gap-2 text-sm font-medium cursor-pointer">
+                        <input type="checkbox" name="qr_geo_wajib" value="1" @checked(($settings['qr_geo_wajib'] ?? '1')=='1') class="accent-[color:var(--cp)] w-4 h-4 mt-0.5">
+                        <span>
+                            Wajibkan Lokasi GPS Saat Absen QR
+                            <span class="block text-xs font-normal text-slate-400 mt-0.5">Kalau dimatikan, siswa/guru bisa absen QR dari mana saja tanpa perlu izin/pelacakan GPS sama sekali — sekolah tidak lagi membatasi jarak.</span>
+                        </span>
+                    </label>
+                </div>
+                <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><span x-ignore><i data-lucide="save" class="w-4 h-4"></i></span> Simpan Lokasi</button>
+            </form>
+
+            @if(($settings['qr_absensi_mode'] ?? 'harian') === 'tetap')
+            <form method="POST" action="{{ route('setting.qrTokenTetap.regenerate') }}" onsubmit="return confirmAction(this, 'Buat ulang token QR tetap? QR lama yang sudah ditempel tidak akan berlaku lagi — Anda perlu mencetak & menempel QR baru.', 'orange')" class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
+                @csrf
+                <button class="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold border border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:hover:bg-amber-900/30">
+                    <span x-ignore><i data-lucide="refresh-cw" class="w-4 h-4"></i></span> Buat Ulang QR Tetap
+                </button>
+            </form>
+            @endif
+        </div>
+    </div>
+
+    {{-- Performa Server: aktif/nonaktifkan widget polling satu-per-satu --}}
+    <div x-show="tab==='performa'" x-transition class="space-y-4">
+        {{-- Card Mode Ujian --}}
+        @php $modeUjianAktif = \App\Support\ModeUjian::aktif(); @endphp
+        <div class="card p-6 border-2 {{ $modeUjianAktif ? 'border-rose-500 bg-rose-50/40 dark:bg-rose-950/20' : 'border-slate-200 dark:border-slate-700' }}">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <span class="p-2 rounded-xl {{ $modeUjianAktif ? 'bg-rose-500 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300' }}">
+                            <i data-lucide="shield-alert" class="w-5 h-5"></i>
+                        </span>
+                        <div>
+                            <h2 class="font-bold text-base text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                                Mode Ujian (Exam Lockdown Mode)
+                                @if($modeUjianAktif)
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-300 animate-pulse">
+                                        <span class="w-2 h-2 rounded-full bg-rose-500"></span> AKTIF
+                                    </span>
+                                @else
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                                        Nonaktif
+                                    </span>
+                                @endif
+                            </h2>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">
+                                Optimasi beban server untuk simulasi &amp; ujian massal ratusan hingga ribuan siswa.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <form method="POST" action="{{ route('setting.mode-ujian.toggle') }}" onsubmit="return confirm('{{ $modeUjianAktif ? 'Nonaktifkan Mode Ujian? Semua sistem dan halaman siswa akan kembali ke operasional normal.' : 'AKTIFKAN Mode Ujian?\n\n- Seluruh siswa langsung dikunci HANYA ke Ruang Ujian.\n- Semua polling background & SIMS-NET dinonaktifkan.\n- Game Arena Belajar & Firebase dihentikan.\n- Submit ujian berjalan instan (Fast-Submit).' }}')">
+                        @csrf
+                        @if($modeUjianAktif)
+                            <button type="submit" class="px-5 py-2.5 rounded-xl text-sm font-bold bg-white dark:bg-slate-800 border-2 border-rose-500 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 shadow-sm flex items-center gap-2 transition">
+                                <i data-lucide="power-off" class="w-4 h-4"></i>
+                                Nonaktifkan Mode Ujian
+                            </button>
+                        @else
+                            <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-sm flex items-center gap-2 transition">
+                                <i data-lucide="zap" class="w-4 h-4"></i>
+                                Aktifkan Mode Ujian
+                            </button>
+                        @endif
+                    </form>
+                </div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-slate-200/80 dark:border-slate-700/80 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div class="flex items-start gap-2 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5"></i>
+                    <span><strong>Kunci Akses Siswa:</strong> Siswa hanya bisa membuka halaman pengerjaan soal. Semua navigasi ke Dashboard, Forum, Presensi, SPP, dan Arena Belajar otomatis dialihkan ke <code class="font-mono bg-slate-100 dark:bg-slate-700 px-1 py-0.5 rounded">/ujian/saya</code>.</span>
+                </div>
+                <div class="flex items-start gap-2 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5"></i>
+                    <span><strong>Nol Polling Background:</strong> Seluruh polling background (absensi, saldo kas, SIMS-NET ticker, notifikasi) dimatikan total sehingga tidak membanjiri CPU server.</span>
+                </div>
+                <div class="flex items-start gap-2 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5"></i>
+                    <span><strong>Fast-Submit Instan:</strong> Waktu respons tombol "Kumpulkan Ujian" dipangkas dari 15-30 detik menjadi &lt; 50 milidetik (grading kalkulasi ditunda ke menu Analisis/Hasil).</span>
+                </div>
+                <div class="flex items-start gap-2 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5"></i>
+                    <span><strong>Nonaktifkan Update Last Seen:</strong> Mencegah write query massal ke database setiap kali ada request dari siswa saat ujian berlangsung.</span>
+                </div>
+            </div>
+        </div>
+
+        <form method="POST" action="{{ route('setting.pollingNonaktif') }}" class="card p-6 space-y-5" x-data>
+            @csrf
+            <div>
+                <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="sliders-horizontal" class="w-4 h-4 text-rose-500"></i> Widget Latar Belakang</h2>
+                <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                    <span class="font-semibold text-emerald-600 dark:text-emerald-400">Tercentang = jalan normal</span> (bawaan). Hilangkan centang untuk MEMATIKAN widget itu sementara — berguna sebelum acara beban tinggi (mis. simulasi ujian serentak) untuk mengurangi jumlah request ke server; pengguna masih bisa buka/refresh manual.
+                    <span class="font-semibold text-slate-500 dark:text-slate-300">Ujian yang sedang berjalan & pemantauan ruangan ujian tidak pernah ada di daftar ini</span> — itu tak pernah bisa dimatikan lewat sini.
+                </p>
+                <p class="text-xs text-slate-400 mt-1">Jangan lupa klik "Simpan" di bagian paling bawah setelah selesai memilih — perubahan berlaku untuk tab yang dibuka/dimuat ulang sesudahnya, bukan instan ke tab yang sudah terbuka.</p>
+            </div>
+
+            @php $kelompokPolling = collect(\App\Support\PollingWidget::semua())->groupBy('kelompok', true); @endphp
+            @foreach($kelompokPolling as $kelompok => $items)
+            <div class="border-t border-slate-100 dark:border-slate-700 pt-4">
+                <h3 class="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">{{ $kelompok }}</h3>
+                <div class="space-y-2">
+                    @foreach($items as $kode => $item)
+                    <label class="flex items-start justify-between gap-4 py-1.5 cursor-pointer">
+                        <span class="min-w-0">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $item['label'] }}</span>
+                            @if($item['catatan'])
+                            <span class="block text-xs text-slate-400 mt-0.5">{{ $item['catatan'] }}</span>
+                            @endif
+                        </span>
+                        <input type="checkbox" name="{{ $kode }}" value="1" class="mt-1 flex-shrink-0 w-4 h-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                               @checked(\App\Support\PollingWidget::aktif($kode))>
+                    </label>
+                    @endforeach
+                </div>
+            </div>
+            @endforeach
+
+            <div class="pt-2 sticky bottom-0 bg-white dark:bg-slate-800 -mx-6 -mb-6 px-6 py-4 border-t border-slate-100 dark:border-slate-700 rounded-b-2xl">
+                <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold">Simpan Pengaturan Performa</button>
+            </div>
+        </form>
+    </div>
+
+    {{-- Kedisiplinan: sistem poin & aturan --}}
+    <div x-show="tab==='disiplin'" x-transition class="space-y-4" x-data="{ jenisAturan: @js($settings['jenis_aturan'] ?? 'p3') }">
+        <form method="POST" action="{{ route('setting.jenisAturan') }}" class="card p-6 space-y-4">
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="shield-alert" class="w-[18px] h-[18px] text-primary"></i> Sistem Aturan Kedisiplinan</h2>
+            <p class="text-xs text-slate-400 -mt-2">Pilih satu sistem pencatatan kedisiplinan siswa yang aktif dipakai sekolah.</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label class="cursor-pointer">
+                    <input type="radio" name="jenis_aturan" value="p3" x-model="jenisAturan" class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="award" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">P3 (Rekomendasi)</p>
+                        <p class="text-xs text-slate-400 mt-0.5">Pelanggaran, Prestasi &amp; Partisipasi — tiga kategori akumulatif per semester, ada cetak laporan.</p>
+                    </div>
+                </label>
+                <label class="cursor-pointer">
+                    <input type="radio" name="jenis_aturan" value="poin" x-model="jenisAturan" class="hidden peer">
+                    <div class="border-2 rounded-xl p-4 transition peer-checked:border-primary peer-checked:bg-primary-50 border-slate-200 dark:border-slate-600 h-full">
+                        <i data-lucide="gauge" class="w-5 h-5 text-slate-400 peer-checked:text-primary mb-1.5"></i>
+                        <p class="font-bold text-sm text-slate-700 dark:text-slate-200">Poin/Aturan</p>
+                        <p class="text-xs text-slate-400 mt-0.5">Ledger poin dari basis 100 — berkurang tiap pelanggaran, ada label Peringatan 1/2/3 otomatis.</p>
+                    </div>
+                </label>
+            </div>
+            <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan Sistem</button>
+        </form>
+
+        <form method="POST" action="{{ route('setting.poinTerlambatAturan') }}" class="card p-6 space-y-3" x-show="jenisAturan==='poin'" x-cloak x-transition>
+            @csrf
+            <h2 class="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><i data-lucide="alarm-clock-minus" class="w-[18px] h-[18px] text-amber-500"></i> Aturan Poin Keterlambatan</h2>
+            <p class="text-xs text-slate-400 -mt-1">Saat siswa absen melewati batas jam terlambat, aturan ini otomatis tercatat sebagai poin dikurangi (khusus sistem Poin/Aturan).</p>
+            <div class="flex flex-wrap items-end gap-3">
+                <div class="flex-1 min-w-48">
+                    <label class="form-label">Aturan</label>
+                    <select name="poin_terlambat_aturan" class="form-select">
+                        <option value="">— Tidak diaktifkan —</option>
+                        @foreach($aturans->where('jenis', 'kurang') as $a)
+                        <option value="{{ $a->uuid }}" @selected(($settings['poin_terlambat_aturan'] ?? '')===$a->uuid)>{{ $a->kode }} — {{ \Illuminate\Support\Str::limit($a->aturan, 40) }} ({{ $a->poin }} poin)</option>
+                        @endforeach
+                    </select>
+                    @if($aturans->where('jenis', 'kurang')->isEmpty())
+                    <p class="text-xs text-amber-500 mt-1">Belum ada aturan berjenis "Kurang". Tambahkan dulu di menu Poin/Aturan.</p>
+                    @endif
+                </div>
+                <button type="submit" class="btn-primary px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Simpan</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@push('styles')<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />@endpush
+@push('scripts')
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ asset('js/geo-location.js') }}?v={{ filemtime(public_path('js/geo-location.js')) }}"></script>
+<script src="{{ asset('js/geo-map-layers.js') }}"></script>
+<script>
+function loginBgForm(cfg) {
+    return {
+        type: cfg.type || 'default',
+        color: cfg.color || '#1e3a8a',
+        previewUrl: cfg.existingUrl || null,
+        focusX: cfg.focusX ?? 50,
+        focusY: cfg.focusY ?? 50,
+        zoom: cfg.zoom ?? 100,
+        // Meniru rasio panel login DESKTOP nyata (~4:5) — panel itu hidden total di HP/tablet
+        // (cuma tampil lg:flex, setengah lebar layar & tinggi penuh), jadi bentuk pratinjau
+        // potret-HP/lanskap-lebar tak relevan sama sekali di sini.
+        previewAspect: '4/5',
+        onFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => { this.previewUrl = ev.target.result; };
+            reader.readAsDataURL(file);
+        },
+        get previewStyle() {
+            return this.type === 'color' ? 'background-color:' + this.color + ';' : '';
+        },
+        // object-position + transform:scale (BUKAN background-size:%) — lihat catatan di
+        // markup pratinjau & auth/login.blade.php: object-fit menghitung crop dari rasio ASLI
+        // gambar, konsisten dgn halaman login sungguhan walau bentuk kontainer beda.
+        get imgStyle() {
+            return `object-position:${this.focusX}% ${this.focusY}%;transform:scale(${this.zoom / 100});transform-origin:${this.focusX}% ${this.focusY}%;`;
+        },
+    };
+}
+
+function qrLokasi(cfg){
+    return {
+        lat: cfg.lat || '', lng: cfg.lng || '',
+        points: Array.isArray(cfg.points) ? cfg.points.map(p => ({
+            label: p.label || 'Titik',
+            lat: String(p.lat ?? ''),
+            lng: String(p.lng ?? ''),
+            radius: p.radius != null && p.radius !== '' ? String(p.radius) : '',
+        })) : [],
+        map:null, marker:null, accCircle:null, extraLayers:[],
+        pinAccuracy:null, locating:false, addMode:false,
+        // Default satelit di Setting — lebih mudah menaruh pin di gerbang/gedung.
+        baseMode:'satellite', baseCtrl:null,
+        init(){
+            const has = this.lat && this.lng;
+            const start = has ? [parseFloat(this.lat), parseFloat(this.lng)] : [-0.9177, 104.4602]; // default Tanjungpinang
+            this.$nextTick(()=>{
+                if(!document.getElementById('setMap')) return;
+                this.map = L.map('setMap').setView(start, has?16:12);
+                this.baseCtrl = SimsMapLayers.attach(this.map, this.baseMode);
+                this.baseMode = this.baseCtrl.mode;
+                if(has) this.place(start[0], start[1], false);
+                this.redrawExtra();
+                this.map.on('click', e=>{
+                    if(this.addMode){
+                        this.addPoint(e.latlng.lat, e.latlng.lng);
+                        this.addMode = false;
+                        showToast('Titik tambahan ditambahkan. Isi label lalu Simpan.','success');
+                        return;
+                    }
+                    this.place(e.latlng.lat, e.latlng.lng);
+                });
+                try { new ResizeObserver(()=> this.map && this.map.invalidateSize()).observe(document.getElementById('setMap')); } catch(e){}
+                [100,400,900,1500].forEach(t=> setTimeout(()=> this.map && this.map.invalidateSize(), t));
+            });
+        },
+        toggleAddMode(){
+            if(this.points.length >= 8){ showToast('Maksimal 8 titik tambahan.','error'); return; }
+            this.addMode = !this.addMode;
+            if(this.addMode) showToast('Klik peta untuk menambah titik.','info');
+        },
+        setBase(mode){
+            if(!this.baseCtrl) return;
+            this.baseCtrl.setMode(mode);
+            this.baseMode = this.baseCtrl.mode;
+        },
+        place(la, ln, recenter=true, accuracy=null){
+            this.lat = (+la).toFixed(6); this.lng = (+ln).toFixed(6);
+            this.pinAccuracy = (typeof accuracy === 'number' && isFinite(accuracy)) ? accuracy : null;
+            if(this.marker) this.map.removeLayer(this.marker);
+            if(this.accCircle){ this.map.removeLayer(this.accCircle); this.accCircle=null; }
+            this.marker = L.marker([la,ln]).addTo(this.map).bindPopup('Pin utama');
+            if(this.pinAccuracy && this.pinAccuracy > 0){
+                this.accCircle = L.circle([la,ln],{
+                    radius: this.pinAccuracy, color:'#3b82f6', weight:1,
+                    fillColor:'#3b82f6', fillOpacity:0.12, dashArray:'4 4'
+                }).addTo(this.map);
+            }
+            if(recenter) this.map.setView([la,ln], 16);
+        },
+        addPoint(la, ln){
+            if(this.points.length >= 8) return;
+            this.points.push({
+                label: 'Titik ' + (this.points.length + 1),
+                lat: (+la).toFixed(6),
+                lng: (+ln).toFixed(6),
+                radius: '',
+            });
+            this.redrawExtra();
+        },
+        removePoint(idx){
+            this.points.splice(idx, 1);
+            this.redrawExtra();
+        },
+        redrawExtra(){
+            if(!this.map) return;
+            this.extraLayers.forEach(l => { try { this.map.removeLayer(l); } catch(e){} });
+            this.extraLayers = [];
+            const defaultR = parseFloat(document.querySelector('input[name=absen_radius]')?.value || '200') || 200;
+            this.points.forEach(p => {
+                const la = parseFloat(p.lat), ln = parseFloat(p.lng);
+                if(!isFinite(la) || !isFinite(ln)) return;
+                const r = (p.radius !== '' && p.radius != null && isFinite(parseFloat(p.radius))) ? parseFloat(p.radius) : defaultR;
+                const m = L.circleMarker([la, ln], { radius: 7, color:'#fff', weight:2, fillColor:'#f59e0b', fillOpacity:1 })
+                    .addTo(this.map).bindPopup(SimsGeo.escapeHtml(p.label || 'Titik'));
+                const c = L.circle([la, ln], { radius: r, color:'#f59e0b', weight:1.5, fillColor:'#f59e0b', fillOpacity:0.08 })
+                    .addTo(this.map);
+                this.extraLayers.push(m, c);
+            });
+        },
+        async useMyLocation(){
+            if(this.locating) return;
+            if(!navigator.geolocation){ showToast('Perangkat ini tidak mendukung deteksi lokasi. Coba buka lewat HP atau browser lain.','error'); return; }
+            if(typeof window.isSecureContext !== 'undefined' && !window.isSecureContext){
+                showToast('Lokasi hanya bisa dibaca lewat alamat aman (https://). Buka halaman ini memakai https, bukan http.','error'); return;
+            }
+            this.locating = true;
+            try {
+                const fix = await SimsGeo.getBestLocation({ watchMs: 16000, targetAccuracy: 25 });
+                this.place(fix.lat, fix.lng, true, fix.accuracy);
+                const acc = Math.round(fix.accuracy);
+                if(acc > 80) showToast('Pin diset dengan akurasi ±'+acc+' m. Ulangi di luar ruangan bila memungkinkan.','info');
+                else showToast('Pin diset dari GPS (±'+acc+' m).','success');
+            } catch(err){
+                showToast((err && err.message) || SimsGeo.pesanGagal(err),'error');
+            }
+            this.locating = false;
+        }
+    }
+}
+</script>
+@endpush
+@endsection

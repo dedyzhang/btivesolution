@@ -3,9 +3,549 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Paket &amp; Biaya Edutive — Kalkulator Simulator Kapasitas Siswa</title>
-  <meta name="description" content="Semua fitur SIMS Edutive terbuka 100% di semua paket. Simulasi biaya langganan berdasarkan kapasitas siswa aktif: 6 juta, 9 juta, 15 juta, dan 22 juta.">
-  <link rel="stylesheet" href="styles.css?v=2.0">
+  <title>Paket &amp; Biaya Edutive — Multi-Device &amp; Full Support</title>
+  <meta name="description" content="Semua fitur SIMS Edutive terbuka 100% di semua paket. Mendukung Multi-Device (Android, Web, PC) dan Full Support pendampingan teknis.">
+  <link rel="stylesheet" href="styles.css?v=3.0">
+  <style>
+    /* STANDALONE EMBEDDED STYLES FOR SIMULATOR & TIERS (ANTI-CACHE) */
+    :root {
+      --ink: #0b1739;
+      --muted: #5b6780;
+      --paper: #f5f8ff;
+      --white: #ffffff;
+      --line: #dce5f2;
+      --violet: #164eb3;
+      --violet-dark: #070765;
+      --mint: #fff4b3;
+      --yellow: #ffd928;
+      --coral: #f5c400;
+      --shadow: 0 24px 70px rgba(7, 7, 101, .13);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; line-height: 1.58; }
+    a { color: inherit; text-decoration: none; }
+    .container { width: min(1160px, calc(100% - 40px)); margin: 0 auto; }
+    .site-header { position: sticky; top: 0; z-index: 20; background: var(--white); border-bottom: 1px solid var(--line); }
+    .nav { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -.035em; font-size: 21px; }
+    .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; color: white; border-radius: 11px; background: linear-gradient(135deg, var(--violet), var(--violet-dark)); box-shadow: 0 8px 18px rgba(7,7,101,.2); }
+    .brand-mark svg { width: 22px; height: 22px; }
+    .nav-links { display: flex; align-items: center; gap: 24px; color: var(--muted); font-size: 14px; font-weight: 600; }
+    .nav-links a:hover { color: var(--violet); }
+    .nav-cta, .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 0; border-radius: 12px; padding: 12px 18px; color: white; background: var(--violet); font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px rgba(22,78,179,.2); transition: transform .2s, background .2s; }
+    .nav-cta:hover, .button:hover { background: var(--violet-dark); transform: translateY(-2px); }
+    .button.ghost { color: var(--violet-dark); background: transparent; border: 1px solid #aebfe2; box-shadow: none; }
+    .button.ghost:hover { background: #edf3ff; }
+    .menu-toggle { display: none; border: 0; background: transparent; font-size: 24px; cursor: pointer; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; color: var(--violet-dark); font-size: 12px; text-transform: uppercase; letter-spacing: .13em; font-weight: 700; }
+    .eyebrow::before { content: ''; width: 22px; height: 2px; background: var(--coral); }
+    h1, h2, h3 { margin: 0; letter-spacing: -.045em; line-height: 1.12; }
+    h1 { max-width: 700px; font-size: clamp(34px, 4.5vw, 54px); }
+    h2 { font-size: clamp(26px, 3vw, 38px); }
+    .page-hero { padding: 58px 0 42px; background: #edf3ff; }
+    .page-hero p { max-width: 680px; color: var(--muted); font-size: 16px; margin: 14px 0 0; }
+    .section { padding: 68px 0; }
+    .section.tint { background: #edf3ff; }
+    .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin-bottom: 28px; }
+    .section-head p { max-width: 470px; margin: 0; color: var(--muted); font-size: 14px; }
+
+    /* SIMULATOR STYLES */
+    .simulator-container {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 30px;
+      align-items: stretch;
+      margin-bottom: 48px;
+    }
+    .simulator-controls-card {
+      padding: 34px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--white);
+      box-shadow: 0 16px 44px rgba(7, 7, 101, .06);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .simulator-result-card {
+      padding: 34px;
+      border: 2px solid var(--violet);
+      border-radius: 24px;
+      background: linear-gradient(175deg, #ffffff 0%, #f4f8ff 100%);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      overflow: hidden;
+    }
+    .simulator-result-card::before {
+      content: '';
+      position: absolute;
+      top: -30px;
+      right: -30px;
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 217, 40, .3) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .calc-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--violet-dark);
+      background: var(--mint);
+      border: 1px solid rgba(245, 196, 0, .4);
+    }
+    .input-stepper-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 20px 0 16px;
+    }
+    .input-stepper-group input[type="number"] {
+      width: 140px;
+      padding: 12px 16px;
+      font-family: inherit;
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--violet-dark);
+      background: #f8fbff;
+      border: 2px solid #cbdaf3;
+      border-radius: 14px;
+      text-align: center;
+    }
+    .input-stepper-group input[type="number"]:focus {
+      outline: none;
+      border-color: var(--violet);
+      box-shadow: 0 0 0 3px rgba(22, 78, 179, .15);
+    }
+    .input-stepper-unit {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .calc-slider {
+      width: 100%;
+      height: 10px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: #dbe7ff;
+      border-radius: 5px;
+      outline: none;
+      margin: 16px 0 10px;
+      cursor: pointer;
+    }
+    .calc-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--violet);
+      border: 3px solid var(--white);
+      box-shadow: 0 4px 10px rgba(7, 7, 101, .28);
+      cursor: grab;
+      transition: transform .15s, background .15s;
+    }
+    .calc-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+      background: var(--violet-dark);
+    }
+    .calc-slider::-moz-range-thumb {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--violet);
+      border: 3px solid var(--white);
+      box-shadow: 0 4px 10px rgba(7, 7, 101, .28);
+      cursor: grab;
+    }
+    .slider-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .presets-group {
+      margin-top: 24px;
+    }
+    .presets-group-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .presets-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .preset-btn {
+      padding: 8px 14px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 10px;
+      border: 1px solid #cbdaf3;
+      background: var(--paper);
+      color: var(--violet-dark);
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+    .preset-btn:hover {
+      background: #e2edff;
+      border-color: var(--violet);
+    }
+    .preset-btn.active {
+      background: var(--violet);
+      color: var(--white);
+      border-color: var(--violet);
+      box-shadow: 0 4px 12px rgba(22, 78, 179, .25);
+    }
+    .calc-price-headline {
+      margin: 14px 0 4px;
+    }
+    .calc-price-amount {
+      font-size: clamp(34px, 4vw, 44px);
+      font-weight: 800;
+      letter-spacing: -.03em;
+      color: var(--violet-dark);
+      display: inline-block;
+    }
+    .calc-price-period {
+      font-size: 16px;
+      color: var(--muted);
+      font-weight: 600;
+      margin-left: 6px;
+    }
+    .calc-price-words {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--violet);
+      margin-bottom: 18px;
+    }
+    .metrics-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .metric-box {
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: var(--white);
+      border: 1px solid #dce5f2;
+    }
+    .metric-val {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .metric-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .calc-includes-list {
+      margin: 0 0 24px;
+      padding: 0;
+      list-style: none;
+      font-size: 13px;
+      color: var(--ink);
+      display: grid;
+      gap: 11px;
+    }
+    .calc-includes-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      line-height: 1.4;
+    }
+    .calc-includes-list li svg.check-icon {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      color: #10875b;
+      margin-top: 2px;
+    }
+
+    /* MULTI-DEVICE & FULL SUPPORT BADGES & STRIP */
+    .device-badges-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 5px;
+    }
+    .device-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .device-pill.android-pill {
+      background: #eaf8f0;
+      color: #0e7b53;
+      border: 1px solid #c0ebd0;
+    }
+    .device-pill.web-pill {
+      background: #eef4ff;
+      color: var(--violet);
+      border: 1px solid #cadcfc;
+    }
+    .device-pill.pc-pill {
+      background: #f5f4fb;
+      color: #533ab7;
+      border: 1px solid #ded9f7;
+    }
+    .device-pill.support-pill {
+      background: #fff8e6;
+      color: #a86c00;
+      border: 1px solid #ffe6a3;
+    }
+    .device-pill svg {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+    }
+
+    .all-features-banner {
+      background: linear-gradient(135deg, var(--violet-dark), var(--violet));
+      color: var(--white);
+      border-radius: 20px;
+      padding: 22px 28px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      box-shadow: 0 14px 36px rgba(7, 7, 101, .14);
+    }
+    .all-features-banner .banner-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--yellow);
+      color: var(--violet-dark);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+
+    .multi-device-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .multi-device-card {
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: var(--white);
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 4px 14px rgba(7,7,101,.04);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .multi-device-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(7,7,101,.08);
+    }
+    .multi-device-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .multi-device-icon.android { background: #eaf8f0; color: #10875b; }
+    .multi-device-icon.web { background: #eef4ff; color: var(--violet); }
+    .multi-device-icon.pc { background: #f5f4fb; color: #533ab7; }
+    .multi-device-icon.support { background: #fff8e6; color: #b37400; }
+    .multi-device-icon svg { width: 22px; height: 22px; }
+
+    .tier-features-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #0d7049;
+      background: #eafaf1;
+      border: 1px solid #c2eed5;
+      padding: 4px 9px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    /* 4 TIERS COMPARISON GRID */
+    .tiers-4-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+    .tier-card {
+      padding: 28px 18px 24px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--white);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      transition: transform .2s, box-shadow .2s, border-color .2s;
+    }
+    .tier-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 36px rgba(7, 7, 101, .09);
+    }
+    .tier-card.active-tier {
+      border: 2px solid var(--violet);
+      box-shadow: 0 20px 48px rgba(22, 78, 179, .18);
+      background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
+      transform: translateY(-6px);
+    }
+    .tier-card-badge {
+      display: inline-block;
+      align-self: flex-start;
+      font-size: 10.5px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--violet);
+      background: #eef4ff;
+      padding: 4px 8px;
+      border-radius: 7px;
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }
+    .tier-card.featured-popular .tier-card-badge {
+      color: var(--violet-dark);
+      background: var(--yellow);
+    }
+    .active-tier-indicator {
+      position: absolute;
+      top: -12px;
+      right: 14px;
+      background: var(--violet-dark);
+      color: var(--yellow);
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 12px;
+      display: none;
+      box-shadow: 0 4px 10px rgba(7, 7, 101, .25);
+      z-index: 2;
+    }
+    .tier-card h3 {
+      font-size: 18px;
+      margin-bottom: 3px;
+    }
+    .tier-card-capacity {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .tier-card-price {
+      font-size: clamp(20px, 1.6vw, 24px);
+      font-weight: 800;
+      color: var(--violet-dark);
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+    .tier-card-price small {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .tier-card-desc {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin-bottom: 16px;
+      line-height: 1.45;
+      min-height: 48px;
+    }
+    .tier-card-features {
+      margin: 0 0 22px;
+      padding: 0;
+      list-style: none;
+      font-size: 12.5px;
+      color: var(--ink);
+      flex-grow: 1;
+      display: grid;
+      gap: 9px;
+    }
+    .tier-card-features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      line-height: 1.38;
+    }
+    .tier-card-features li svg.check-icon {
+      flex-shrink: 0;
+      width: 14px;
+      height: 14px;
+      color: #10875b;
+      margin-top: 2px;
+    }
+    .tier-card-action {
+      width: 100%;
+      font-size: 13px;
+      padding: 10px 14px;
+    }
+
+    /* FAQ & FOOTER */
+    .faq { display: grid; gap: 10px; }
+    .faq details { padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); }
+    .faq summary { cursor: pointer; font-weight: 700; }
+    .faq p { margin-bottom: 0; color: var(--muted); }
+    .footer { padding: 38px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .footer-row { display: flex; justify-content: space-between; gap: 20px; }
+
+    /* RESPONSIVE */
+    @media (max-width: 900px) {
+      .simulator-container { grid-template-columns: 1fr; }
+      .tiers-4-grid { grid-template-columns: repeat(2, 1fr); }
+      .multi-device-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 680px) {
+      .container { width: min(100% - 28px, 1160px); }
+      .nav-links { display: none; position: absolute; top: 76px; left: 14px; right: 14px; padding: 16px; flex-direction: column; align-items: stretch; border: 1px solid var(--line); border-radius: 14px; background: var(--white); box-shadow: var(--shadow); }
+      .nav-links.open { display: flex; }
+      .menu-toggle { display: block; }
+      .nav-cta { text-align: center; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 14px; }
+      .tiers-4-grid { grid-template-columns: 1fr; }
+      .multi-device-strip { grid-template-columns: 1fr; }
+      .tier-card.active-tier { transform: none; }
+      .footer-row { display: block; }
+      .metrics-row { grid-template-columns: 1fr; }
+      .input-stepper-group { flex-wrap: wrap; }
+      .all-features-banner { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
 </head>
 <body>
   <header class="site-header">
@@ -33,7 +573,7 @@
       <div class="container">
         <span class="eyebrow">Simulasi Biaya &amp; Paket Layanan</span>
         <h1>Semua fitur terbuka penuh. Biaya mengikuti skala siswa.</h1>
-        <p>Tidak ada modul yang dikunci atau disunat. Semua sekolah mendapatkan akses 100% ke seluruh fitur SIMS Edutive—mulai dari Absensi Wajah, CBT Ujian Online, Asisten Guru AI, hingga Keuangan SPP. Perbedaan paket murni didasarkan pada kapasitas jumlah siswa aktif Anda.</p>
+        <p>Akses 100% tanpa batasan modul. Didukung akses <strong>Multi-Device (Android, Web &amp; PC)</strong> serta <strong>Full Support</strong> pendampingan teknis langsung dari tim ahli Edutive.</p>
       </div>
     </section>
 
@@ -53,10 +593,10 @@
                 <span class="input-stepper-unit">Siswa Aktif Terdaftar</span>
               </div>
 
-              <input type="range" class="calc-slider" id="calc-slider" min="20" max="2000" step="10" value="350" aria-label="Slider jumlah siswa">
+              <input type="range" class="calc-slider" id="calc-slider" min="1" max="2000" step="1" value="350" aria-label="Slider jumlah siswa">
 
               <div class="slider-labels">
-                <span>20 Siswa</span>
+                <span>1 Siswa</span>
                 <span>100</span>
                 <span>700</span>
                 <span>1.000</span>
@@ -66,8 +606,8 @@
               <div class="presets-group">
                 <span class="presets-group-label">Pilihan Cepat Skenario Sekolah:</span>
                 <div class="presets-row">
-                  <button type="button" class="preset-btn" data-calc-preset="80">80 Siswa (&lt; 100)</button>
-                  <button type="button" class="preset-btn active" data-calc-preset="350">350 Siswa (100–700)</button>
+                  <button type="button" class="preset-btn" data-calc-preset="100">100 Siswa (1–100)</button>
+                  <button type="button" class="preset-btn active" data-calc-preset="350">350 Siswa (101–700)</button>
                   <button type="button" class="preset-btn" data-calc-preset="850">850 Siswa (701–1.000)</button>
                   <button type="button" class="preset-btn" data-calc-preset="1500">1.500 Siswa (&gt; 1.000)</button>
                 </div>
@@ -110,23 +650,56 @@
               <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: block; margin-bottom: 10px;">Fitur Lengkap Termasuk Dalam Paket Ini:</span>
               <ul class="calc-includes-list">
                 <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  <span><strong>Seluruh Modul Operasional:</strong> Absensi Wajah, QR Geolokasi, Nilai &amp; Rapor Digital</span>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <div>
+                    <strong>Multi-Device: Android, Web &amp; PC Desktop</strong>
+                    <div class="device-badges-row">
+                      <span class="device-pill android-pill">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h2v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h1c.55 0 1-.45 1-1V8H6v10zM3.5 8C2.67 8 2 8.67 2 9.5v7c0 .83.67 1.5 1.5 1.5S5 17.33 5 16.5v-7C5 8.67 4.33 8 3.5 8zm17 0c-.83 0-1.5.67-1.5 1.5v7c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-7c0-.83-.67-1.5-1.5-1.5zm-4.97-4.84l1.3-1.3c.2-.2.2-.51 0-.71-.2-.2-.51-.2-.71 0l-1.48 1.48C13.85 2.23 12.95 2 12 2c-.96 0-1.86.23-2.66.63L7.85 1.15c-.2-.2-.51-.2-.71 0-.2.2-.2.51 0 .71l1.31 1.31C6.97 4.26 6 5.92 6 7.8h12c0-1.88-.97-3.54-2.47-4.64zM9 5.5c-.41 0-.75-.34-.75-.75s.34-.75.75-.75.75.34.75.75-.34.75-.75.75zm6 0c-.41 0-.75-.34-.75-.75s.34-.75.75-.75.75.34.75.75-.34.75-.75.75z"/></svg>
+                        Android
+                      </span>
+                      <span class="device-pill web-pill">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        Web Browser
+                      </span>
+                      <span class="device-pill pc-pill">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                        PC Desktop
+                      </span>
+                    </div>
+                  </div>
                 </li>
                 <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <div>
+                    <strong>Full Support &amp; Pendampingan Penuh:</strong>
+                    <span style="display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px;">Setup awal, migrasi data siswa &amp; pelatihan guru/operator dari tim ahli Edutive</span>
+                    <div class="device-badges-row">
+                      <span class="device-pill support-pill">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
+                        Layanan Full Support Aktif
+                      </span>
+                    </div>
+                  </div>
+                </li>
+                <li>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>Modul Operasional &amp; Rapor:</strong> Absensi Wajah, QR Geolokasi, Nilai &amp; Rapor Digital</span>
+                </li>
+                <li>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                   <span><strong>CBT &amp; Ujian Online:</strong> Bank soal, token, auto-grading terhubung langsung ke nilai</span>
                 </li>
                 <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                   <span><strong>Asisten Guru AI &amp; Arena Belajar:</strong> Buat soal, RPM, kuis &amp; gamifikasi pembelajaran</span>
                 </li>
                 <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                   <span><strong>Keuangan &amp; Sarpras:</strong> Tagihan SPP, bukti bayar, rekonsiliasi, serta inventaris aset</span>
                 </li>
                 <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                   <span><strong>Pengguna Unlimited:</strong> Akun tak terbatas untuk Guru, Siswa, Orang Tua, &amp; Manajemen</span>
                 </li>
               </ul>
@@ -160,80 +733,180 @@
           </div>
         </div>
 
+        <!-- MULTI DEVICE & SUPPORT STRIP (WITH OFFICIAL LOGOS) -->
+        <div class="multi-device-strip">
+          <!-- ANDROID CARD -->
+          <div class="multi-device-card">
+            <div class="multi-device-icon android">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h2v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h1c.55 0 1-.45 1-1V8H6v10zM3.5 8C2.67 8 2 8.67 2 9.5v7c0 .83.67 1.5 1.5 1.5S5 17.33 5 16.5v-7C5 8.67 4.33 8 3.5 8zm17 0c-.83 0-1.5.67-1.5 1.5v7c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-7c0-.83-.67-1.5-1.5-1.5zm-4.97-4.84l1.3-1.3c.2-.2.2-.51 0-.71-.2-.2-.51-.2-.71 0l-1.48 1.48C13.85 2.23 12.95 2 12 2c-.96 0-1.86.23-2.66.63L7.85 1.15c-.2-.2-.51-.2-.71 0-.2.2-.2.51 0 .71l1.31 1.31C6.97 4.26 6 5.92 6 7.8h12c0-1.88-.97-3.54-2.47-4.64zM9 5.5c-.41 0-.75-.34-.75-.75s.34-.75.75-.75.75.34.75.75-.34.75-.75.75zm6 0c-.41 0-.75-.34-.75-.75s.34-.75.75-.75.75.34.75.75-.34.75-.75.75z"/>
+              </svg>
+            </div>
+            <div>
+              <strong style="display: block; font-size: 13.5px; color: var(--ink);">Aplikasi Android</strong>
+              <span style="font-size: 12px; color: var(--muted);">Mobile guru, orang tua &amp; siswa</span>
+            </div>
+          </div>
+
+          <!-- WEB CARD -->
+          <div class="multi-device-card">
+            <div class="multi-device-icon web">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </div>
+            <div>
+              <strong style="display: block; font-size: 13.5px; color: var(--ink);">Web Browser</strong>
+              <span style="font-size: 12px; color: var(--muted);">Chrome, Edge, Safari, Firefox</span>
+            </div>
+          </div>
+
+          <!-- PC CARD -->
+          <div class="multi-device-card">
+            <div class="multi-device-icon pc">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+            </div>
+            <div>
+              <strong style="display: block; font-size: 13.5px; color: var(--ink);">PC &amp; Komputer</strong>
+              <span style="font-size: 12px; color: var(--muted);">CBT ujian &amp; dashboard tata usaha</span>
+            </div>
+          </div>
+
+          <!-- FULL SUPPORT CARD -->
+          <div class="multi-device-card">
+            <div class="multi-device-icon support">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+              </svg>
+            </div>
+            <div>
+              <strong style="display: block; font-size: 13.5px; color: var(--ink);">Full Support</strong>
+              <span style="font-size: 12px; color: var(--muted);">Pendampingan &amp; pelatihan tim</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 4 TIER COMPARISON CARDS -->
         <div class="tiers-4-grid">
           <!-- TIER 1 -->
           <article class="tier-card" data-tier-card="1">
             <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
-            <span class="tier-card-badge">&lt; 100 Siswa</span>
+            <span class="tier-card-badge">1 – 100 Siswa</span>
             <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
             <h3>Tier Pratama</h3>
-            <div class="tier-card-capacity">Kapasitas: Kurang dari 100 Siswa</div>
+            <div class="tier-card-capacity">Kapasitas: 1 – 100 Siswa</div>
             <div class="tier-card-price">Rp 6.000.000 <small>/ thn</small></div>
             <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">6 Juta Rupiah</div>
-            <p class="tier-card-desc">Paket lengkap untuk sekolah rintisan, PAUD/TK mandiri, atau PKBM dengan kapasitas siswa di bawah 100.</p>
+            <p class="tier-card-desc">Paket lengkap untuk sekolah rintisan, PAUD/TK mandiri, atau PKBM dengan kapasitas 1 hingga 100 siswa.</p>
             <ul class="tier-card-features">
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Multi-Device:</strong> Android, Web &amp; PC
+                  <div class="device-badges-row">
+                    <span class="device-pill android-pill">Android</span>
+                    <span class="device-pill web-pill">Web</span>
+                    <span class="device-pill pc-pill">PC</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Full Support:</strong> Pendampingan teknis &amp; pelatihan
+                  <div class="device-badges-row">
+                    <span class="device-pill support-pill">Full Support Siap Bantu</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
               </li>
             </ul>
-            <button type="button" class="button ghost tier-card-action" data-select-tier="80">Pilih Tier Ini</button>
+            <button type="button" class="button ghost tier-card-action" data-select-tier="100">Pilih Tier Ini</button>
           </article>
 
           <!-- TIER 2 -->
           <article class="tier-card featured-popular" data-tier-card="2">
             <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
-            <span class="tier-card-badge">Paling Populer · 100–700 Siswa</span>
+            <span class="tier-card-badge">Paling Populer · 101–700 Siswa</span>
             <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
             <h3>Tier Reguler</h3>
-            <div class="tier-card-capacity">Kapasitas: 100 – 700 Siswa</div>
+            <div class="tier-card-capacity">Kapasitas: 101 – 700 Siswa</div>
             <div class="tier-card-price">Rp 9.000.000 <small>/ thn</small></div>
             <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">9 Juta Rupiah</div>
-            <p class="tier-card-desc">Paket paling seimbang dan favorit untuk SD, SMP, atau SMA standar dengan efisiensi biaya tertinggi.</p>
+            <p class="tier-card-desc">Paket paling seimbang dan favorit untuk SD, SMP, atau SMA standar dengan kapasitas 101 hingga 700 siswa.</p>
             <ul class="tier-card-features">
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Multi-Device:</strong> Android, Web &amp; PC
+                  <div class="device-badges-row">
+                    <span class="device-pill android-pill">Android</span>
+                    <span class="device-pill web-pill">Web</span>
+                    <span class="device-pill pc-pill">PC</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Full Support:</strong> Pendampingan teknis &amp; pelatihan
+                  <div class="device-badges-row">
+                    <span class="device-pill support-pill">Full Support Siap Bantu</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
               </li>
             </ul>
@@ -252,27 +925,47 @@
             <p class="tier-card-desc">Optimal untuk sekolah menengah atas besar atau SMK dengan mobilitas tinggi dan ujian serentak massal.</p>
             <ul class="tier-card-features">
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Multi-Device:</strong> Android, Web &amp; PC
+                  <div class="device-badges-row">
+                    <span class="device-pill android-pill">Android</span>
+                    <span class="device-pill web-pill">Web</span>
+                    <span class="device-pill pc-pill">PC</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Full Support:</strong> Pendampingan teknis &amp; pelatihan
+                  <div class="device-badges-row">
+                    <span class="device-pill support-pill">Full Support Siap Bantu</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
               </li>
             </ul>
@@ -291,27 +984,47 @@
             <p class="tier-card-desc">Kapasitas tanpa batas untuk SMK besar atau yayasan multi-jenjang lebih dari 1.000 siswa aktif.</p>
             <ul class="tier-card-features">
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Multi-Device:</strong> Android, Web &amp; PC
+                  <div class="device-badges-row">
+                    <span class="device-pill android-pill">Android</span>
+                    <span class="device-pill web-pill">Web</span>
+                    <span class="device-pill pc-pill">PC</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <div>
+                  <strong>Full Support:</strong> Pendampingan teknis &amp; pelatihan
+                  <div class="device-badges-row">
+                    <span class="device-pill support-pill">Full Support Siap Bantu</span>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
               </li>
               <li>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
               </li>
             </ul>
@@ -332,6 +1045,14 @@
         </div>
         <div class="faq">
           <details>
+            <summary>Apakah SIMS Edutive bisa diakses dari smartphone Android, Web, dan PC?</summary>
+            <p><strong>Ya, 100% Multi-Device.</strong> Aplikasi Edutive dapat diakses melalui aplikasi smartphone Android (sangat praktis untuk absensi guru, laporan ortu, dan tugas siswa), serta melalui Web Browser di PC/Laptop (ideal untuk tata usaha, bank soal CBT, buku nilai, dan manajemen sarpras).</p>
+          </details>
+          <details>
+            <summary>Apakah ada bantuan teknis dan pendampingan (Full Support)?</summary>
+            <p><strong>Ya, Full Support sudah termasuk.</strong> Tim teknis Edutive siap membantu mulai dari pendampingan migrasi data awal siswa &amp; guru, konfigurasi modul, pelatihan operator sekolah, hingga penanganan kendala teknis harian tanpa biaya tambahan.</p>
+          </details>
+          <details>
             <summary>Apakah ada perbedaan fitur antara paket kecil dan paket besar?</summary>
             <p><strong>Tidak ada perbedaan fitur sama sekali.</strong> Seluruh fitur dan modul SIMS Edutive—mulai dari Absensi Wajah &amp; QR, CBT Ujian Online, Nilai &amp; Rapor Digital, Keuangan SPP, Sarpras, hingga Asisten Guru AI—terbuka 100% untuk semua sekolah. Perbedaan biaya murni hanya dihitung dari kapasitas jumlah siswa aktif Anda.</p>
           </details>
@@ -348,10 +1069,6 @@
             <p>Ya, modul Asisten Guru AI dan Arena Belajar sudah terintegrasi pada sistem di semua paket. Konfigurasi model dan hak akses guru dapat disesuaikan dengan kebutuhan ajar sekolah saat proses setup.</p>
           </details>
           <details>
-            <summary>Apakah pelatihan guru dan tim operator sudah termasuk?</summary>
-            <p>Ya. Setiap implementasi paket tahunan disertai panduan alur peran, video pengenalan, dan sesi pelatihan daring untuk admin serta perwakilan guru sekolah.</p>
-          </details>
-          <details>
             <summary>Bagaimana langkah untuk memulai?</summary>
             <p>Klik tombol minta demo atau pilih tier sesuai simulasi Anda. Tim kami akan menyiapkan sesi demo interaktif dan memandu penyiapan data awal sekolah.</p>
           </details>
@@ -366,6 +1083,137 @@
       <span><a href="index.html">Beranda</a> · <a href="fitur.html">Fitur</a> · <a href="harga.html">Paket</a> · <a href="kontak.html">Kontak</a></span>
     </div>
   </footer>
-  <script src="script.js?v=2.0"></script>
+
+  <script src="script.js?v=3.0"></script>
+  <script>
+    // Self-contained inline fallback logic
+    (function() {
+      const slider = document.getElementById('calc-slider');
+      const numberInput = document.getElementById('calc-number');
+      const priceDisplay = document.getElementById('calc-price');
+      const priceWords = document.getElementById('calc-price-words');
+      const tierBadge = document.getElementById('calc-tier-badge');
+      const perMonthDisplay = document.getElementById('calc-per-month');
+      const perYearDisplay = document.getElementById('calc-per-year');
+      const ctaBtn = document.getElementById('calc-cta');
+      const presetBtns = document.querySelectorAll('[data-calc-preset]');
+      const tierCards = document.querySelectorAll('[data-tier-card]');
+      const tierSelectBtns = document.querySelectorAll('[data-select-tier]');
+
+      if (!slider || !numberInput) return;
+
+      function calculate(students) {
+        const count = Math.max(1, parseInt(students, 10) || 1);
+        let price = 0, priceText = '', priceWordsText = '', tierName = '', tierId = 1, tierCode = 'under-100';
+
+        if (count <= 100) {
+          price = 6000000;
+          priceText = 'Rp 6.000.000';
+          priceWordsText = '6 Juta Rupiah / tahun';
+          tierName = 'Tier Pratama (1 – 100 Siswa)';
+          tierId = 1;
+          tierCode = '1-100';
+        } else if (count <= 700) {
+          price = 9000000;
+          priceText = 'Rp 9.000.000';
+          priceWordsText = '9 Juta Rupiah / tahun';
+          tierName = 'Tier Reguler (101 – 700 Siswa)';
+          tierId = 2;
+          tierCode = '101-700';
+        } else if (count <= 1000) {
+          price = 15000000;
+          priceText = 'Rp 15.000.000';
+          priceWordsText = '15 Juta Rupiah / tahun';
+          tierName = 'Tier Utama (701 – 1.000 Siswa)';
+          tierId = 3;
+          tierCode = '701-1000';
+        } else {
+          price = 22000000;
+          priceText = 'Rp 22.000.000';
+          priceWordsText = '22 Juta Rupiah / tahun';
+          tierName = 'Tier Kompleks (> 1.000 Siswa)';
+          tierId = 4;
+          tierCode = 'above-1000';
+        }
+
+        const perYearPerStudent = Math.round(price / count);
+        const perMonthPerStudent = Math.round(price / (count * 12));
+        return { count, price, priceText, priceWordsText, tierName, tierId, tierCode, perYearPerStudent, perMonthPerStudent };
+      }
+
+      function formatNumber(num) {
+        return new Intl.NumberFormat('id-ID').format(num);
+      }
+
+      function update(count) {
+        const data = calculate(count);
+        slider.value = Math.min(2000, Math.max(1, data.count));
+        numberInput.value = data.count;
+
+        if (priceDisplay) priceDisplay.textContent = data.priceText;
+        if (priceWords) priceWords.textContent = '(' + data.priceWordsText + ')';
+        if (tierBadge) tierBadge.textContent = data.tierName;
+        if (perMonthDisplay) perMonthDisplay.textContent = '~Rp ' + formatNumber(data.perMonthPerStudent);
+        if (perYearDisplay) perYearDisplay.textContent = 'Rp ' + formatNumber(data.perYearPerStudent);
+
+        if (ctaBtn) {
+          ctaBtn.textContent = 'Konsultasi Paket Ini (' + formatNumber(data.count) + ' Siswa) →';
+          ctaBtn.href = 'kontak.html?siswa=' + data.count + '&tier=' + data.tierCode + '&biaya=' + encodeURIComponent(data.priceText);
+        }
+
+        tierCards.forEach(function(card) {
+          const cardTierId = parseInt(card.getAttribute('data-tier-card'), 10);
+          const indicator = card.querySelector('.active-tier-indicator');
+          if (cardTierId === data.tierId) {
+            card.classList.add('active-tier');
+            if (indicator) indicator.style.display = 'inline-flex';
+          } else {
+            card.classList.remove('active-tier');
+            if (indicator) indicator.style.display = 'none';
+          }
+        });
+
+        presetBtns.forEach(function(btn) {
+          const presetVal = parseInt(btn.getAttribute('data-calc-preset'), 10);
+          if (presetVal === data.count) {
+            btn.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+      }
+
+      slider.addEventListener('input', function(e) { update(e.target.value); });
+      numberInput.addEventListener('input', function(e) {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val)) update(val);
+      });
+      numberInput.addEventListener('blur', function(e) {
+        let val = parseInt(e.target.value, 10);
+        if (isNaN(val) || val < 1) val = 1;
+        update(val);
+      });
+      presetBtns.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const val = parseInt(btn.getAttribute('data-calc-preset'), 10);
+          update(val);
+        });
+      });
+      tierSelectBtns.forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.preventDefault();
+          const targetVal = parseInt(btn.getAttribute('data-select-tier'), 10);
+          update(targetVal);
+          document.getElementById('kalkulator')?.scrollIntoView({ behavior: 'smooth' });
+        });
+      });
+
+      update(parseInt(numberInput.value, 10) || 350);
+
+      document.querySelector('[data-menu]')?.addEventListener('click', function() {
+        document.querySelector('[data-nav]')?.classList.toggle('open');
+      });
+    })();
+  </script>
 </body>
 </html>

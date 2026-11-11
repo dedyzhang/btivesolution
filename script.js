@@ -138,20 +138,20 @@ const initPricingSimulator = () => {
     let tierId = 1;
     let tierCode = 'under-100';
 
-    if (count < 100) {
+    if (count <= 100) {
       price = 6000000;
       priceText = 'Rp 6.000.000';
       priceWordsText = '6 Juta Rupiah / tahun';
-      tierName = 'Tier Pratama (< 100 Siswa)';
+      tierName = 'Tier Pratama (1 – 100 Siswa)';
       tierId = 1;
-      tierCode = 'under-100';
+      tierCode = '1-100';
     } else if (count <= 700) {
       price = 9000000;
       priceText = 'Rp 9.000.000';
       priceWordsText = '9 Juta Rupiah / tahun';
-      tierName = 'Tier Reguler (100 – 700 Siswa)';
+      tierName = 'Tier Reguler (101 – 700 Siswa)';
       tierId = 2;
-      tierCode = '100-700';
+      tierCode = '101-700';
     } else if (count <= 1000) {
       price = 15000000;
       priceText = 'Rp 15.000.000';
@@ -189,7 +189,7 @@ const initPricingSimulator = () => {
   const updateUI = (count) => {
     const data = calculateTier(count);
 
-    slider.value = Math.min(2000, Math.max(20, data.count));
+    slider.value = Math.min(2000, Math.max(1, data.count));
     numberInput.value = data.count;
 
     if (priceDisplay) priceDisplay.textContent = data.priceText;
@@ -283,8 +283,8 @@ const initContactPageParams = () => {
       siswaSelect.value = tierParam;
     } else if (siswaParam) {
       const count = parseInt(siswaParam, 10);
-      if (count < 100) siswaSelect.value = 'under-100';
-      else if (count <= 700) siswaSelect.value = '100-700';
+      if (count <= 100) siswaSelect.value = '1-100';
+      else if (count <= 700) siswaSelect.value = '101-700';
       else if (count <= 1000) siswaSelect.value = '701-1000';
       else siswaSelect.value = 'above-1000';
     }

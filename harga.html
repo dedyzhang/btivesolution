@@ -1,6 +1,371 @@
 <!doctype html>
-<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paket SIMS — Sesuaikan dengan tahap sekolah</title><meta name="description" content="Pilihan paket SIMS untuk sekolah. Harga final dikonfirmasi saat konsultasi kebutuhan dan implementasi."><link rel="stylesheet" href="styles.css"></head>
-<body><header class="site-header"><div class="container nav"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3 2 8.5 12 14l8-4.4V17M5 10.2V16c2.2 2.5 4.6 3.7 7 3.7s4.8-1.2 7-3.7v-5.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span> Edutive</a><button class="menu-toggle" data-menu aria-label="Buka menu">☰</button><nav class="nav-links" data-nav><a href="fitur.html">Fitur</a><a href="harga.html">Paket</a><a href="index.html#alur">Cara kerja</a><a href="kontak.html">Kontak</a><a class="nav-cta" href="kontak.html">Minta Demo</a></nav></div></header>
-<main><section class="page-hero"><div class="container"><span class="eyebrow">Paket layanan</span><h1>Mulai dari kebutuhan sekolah, bukan dari daftar menu.</h1><p>Struktur paket ini mengikuti rancangan tier SIMS. Harga final dan modul yang aktif ditentukan setelah konsultasi kapasitas, kebutuhan, dan skenario implementasi.</p></div></section>
-<section class="section"><div class="container"><div class="price-grid"><article class="price-card"><span class="feature-tag">Dasar</span><h3>Fondasi operasional</h3><div class="price">Hubungi kami <small>untuk penawaran</small></div><ul><li>Data master sekolah.</li><li>Absensi dan presensi.</li><li>Akademik, nilai, dan rapor.</li><li>Pengumuman, kalender, dan agenda.</li></ul><a class="button ghost" href="kontak.html">Minta penawaran</a></article><article class="price-card featured"><span class="feature-tag">Pro · paling populer</span><h3>Kolaborasi sekolah</h3><div class="price">Hubungi kami <small>untuk penawaran</small></div><ul><li>Semua fitur Dasar.</li><li>Ruang Kelas dan Forum.</li><li>Keuangan/SPP dan verifikasi.</li><li>Kedisiplinan, chat, dan notifikasi.</li><li>Aplikasi Android sesuai setup.</li></ul><a class="button" href="kontak.html">Jadwalkan konsultasi</a></article><article class="price-card"><span class="feature-tag">Enterprise</span><h3>Transformasi terpadu</h3><div class="price">Custom <small>hubungi kami</small></div><ul><li>Semua fitur Pro.</li><li>Sarpras lengkap.</li><li>Asisten Guru dan AI sekolah.</li><li>Login WebAuthn.</li><li>Dukungan prioritas dan kustomisasi.</li></ul><a class="button ghost" href="kontak.html">Hubungi kami</a></article></div><p class="hero-note">Harga pada halaman ini sengaja belum diisi karena angka paket dan PPN perlu dikonfirmasi sebelum dipublikasikan.</p></div></section>
-<section class="section tint"><div class="container"><div class="section-head"><div><span class="eyebrow">Pertanyaan umum</span><h2>Keputusan pembelian lebih jelas.</h2></div></div><div class="faq"><details><summary>Apakah semua fitur langsung aktif?</summary><p>Modul dapat disesuaikan dengan paket, peran, dan konfigurasi sekolah. Demo akan menunjukkan alur yang paling relevan.</p></details><details><summary>Apakah AI sudah termasuk?</summary><p>Fitur AI tersedia sesuai konfigurasi API key guru/sekolah. Penggunaan dan pengaturan credential perlu dibahas saat implementasi.</p></details><details><summary>Apakah ada pembayaran online otomatis?</summary><p>Belum termasuk dalam rancangan saat ini. Aktivasi langganan dilakukan manual oleh superadmin.</p></details><details><summary>Bagaimana cara mulai?</summary><p>Mulai dengan demo, pemetaan kebutuhan, penentuan paket, lalu persiapan data dan peran pengguna.</p></details></div></div></section></main><footer class="footer"><div class="container footer-row"><span>© SIMS — Sistem Informasi Manajemen Sekolah</span><span><a href="index.html">Beranda</a> · <a href="fitur.html">Fitur</a> · <a href="kontak.html">Kontak</a></span></div></footer><script src="script.js"></script></body></html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Paket &amp; Biaya Edutive — Kalkulator Simulator Kapasitas Siswa</title>
+  <meta name="description" content="Semua fitur SIMS Edutive terbuka 100% di semua paket. Simulasi biaya langganan berdasarkan kapasitas siswa aktif: 6 juta, 9 juta, 15 juta, dan 22 juta.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="index.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M12 3 2 8.5 12 14l8-4.4V17M5 10.2V16c2.2 2.5 4.6 3.7 7 3.7s4.8-1.2 7-3.7v-5.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span> Edutive
+      </a>
+      <button class="menu-toggle" data-menu aria-label="Buka menu">☰</button>
+      <nav class="nav-links" data-nav>
+        <a href="fitur.html">Fitur</a>
+        <a href="harga.html">Paket</a>
+        <a href="index.html#alur">Cara kerja</a>
+        <a href="kontak.html">Kontak</a>
+        <a class="nav-cta" href="kontak.html">Minta Demo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="page-hero">
+      <div class="container">
+        <span class="eyebrow">Simulasi Biaya &amp; Paket Layanan</span>
+        <h1>Semua fitur terbuka penuh. Biaya mengikuti skala siswa.</h1>
+        <p>Tidak ada modul yang dikunci atau disunat. Semua sekolah mendapatkan akses 100% ke seluruh fitur SIMS Edutive—mulai dari Absensi Wajah, CBT Ujian Online, Asisten Guru AI, hingga Keuangan SPP. Perbedaan paket murni didasarkan pada kapasitas jumlah siswa aktif Anda.</p>
+      </div>
+    </section>
+
+    <!-- SECTION KALKULATOR SIMULATOR -->
+    <section class="section" id="kalkulator">
+      <div class="container">
+        <div class="simulator-container">
+          <!-- KARTU KONTROL -->
+          <div class="simulator-controls-card">
+            <div>
+              <span class="eyebrow">Simulator Investasi</span>
+              <h2 style="margin: 10px 0 8px; font-size: 24px;">Kapasitas Siswa Sekolah</h2>
+              <p style="color: var(--muted); font-size: 14px; margin: 0 0 20px;">Ketik jumlah siswa aktif atau geser pengatur slider di bawah ini:</p>
+
+              <div class="input-stepper-group">
+                <input type="number" id="calc-number" min="1" max="5000" value="350" aria-label="Jumlah siswa aktif">
+                <span class="input-stepper-unit">Siswa Aktif Terdaftar</span>
+              </div>
+
+              <input type="range" class="calc-slider" id="calc-slider" min="20" max="2000" step="10" value="350" aria-label="Slider jumlah siswa">
+
+              <div class="slider-labels">
+                <span>20 Siswa</span>
+                <span>100</span>
+                <span>700</span>
+                <span>1.000</span>
+                <span>2.000+ Siswa</span>
+              </div>
+
+              <div class="presets-group">
+                <span class="presets-group-label">Pilihan Cepat Skenario Sekolah:</span>
+                <div class="presets-row">
+                  <button type="button" class="preset-btn" data-calc-preset="80">80 Siswa (&lt; 100)</button>
+                  <button type="button" class="preset-btn active" data-calc-preset="350">350 Siswa (100–700)</button>
+                  <button type="button" class="preset-btn" data-calc-preset="850">850 Siswa (701–1.000)</button>
+                  <button type="button" class="preset-btn" data-calc-preset="1500">1.500 Siswa (&gt; 1.000)</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line);">
+              <p style="margin: 0; font-size: 13px; color: var(--muted);">
+                💡 <strong>Catatan:</strong> Kuota akun untuk Guru, Tenaga Kependidikan, dan Orang Tua tidak dibatasi (unlimited). Biaya flat tahunan sudah mencakup hak akses seluruh peran sekolah tanpa biaya tersembunyi.
+              </p>
+            </div>
+          </div>
+
+          <!-- KARTU HASIL KALKULASI -->
+          <div class="simulator-result-card">
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
+                <span class="calc-badge" id="calc-tier-badge">Tier Reguler (100 – 700 Siswa)</span>
+                <span style="font-size: 12px; font-weight: 700; color: #10875b; background: #eafaf1; border: 1px solid #c2eed5; padding: 4px 10px; border-radius: 8px;">✓ 100% Fitur Terbuka</span>
+              </div>
+
+              <span style="font-size: 13px; color: var(--muted); font-weight: 600;">Estimasi Biaya Lisensi Aplikasi:</span>
+              <div class="calc-price-headline">
+                <span class="calc-price-amount" id="calc-price">Rp 9.000.000</span>
+                <span class="calc-price-period">/ tahun</span>
+              </div>
+              <div class="calc-price-words" id="calc-price-words">(9 Juta Rupiah / tahun)</div>
+
+              <div class="metrics-row">
+                <div class="metric-box">
+                  <div class="metric-val" id="calc-per-month">~Rp 2.143</div>
+                  <div class="metric-desc">per siswa / bulan</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-val" id="calc-per-year">Rp 25.714</div>
+                  <div class="metric-desc">per siswa / tahun</div>
+                </div>
+              </div>
+
+              <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: block; margin-bottom: 10px;">Fitur Lengkap Termasuk Dalam Paket Ini:</span>
+              <ul class="calc-includes-list">
+                <li>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>Seluruh Modul Operasional:</strong> Absensi Wajah, QR Geolokasi, Nilai &amp; Rapor Digital</span>
+                </li>
+                <li>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>CBT &amp; Ujian Online:</strong> Bank soal, token, auto-grading terhubung langsung ke nilai</span>
+                </li>
+                <li>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>Asisten Guru AI &amp; Arena Belajar:</strong> Buat soal, RPM, kuis &amp; gamifikasi pembelajaran</span>
+                </li>
+                <li>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>Keuangan &amp; Sarpras:</strong> Tagihan SPP, bukti bayar, rekonsiliasi, serta inventaris aset</span>
+                </li>
+                <li>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span><strong>Pengguna Unlimited:</strong> Akun tak terbatas untuk Guru, Siswa, Orang Tua, &amp; Manajemen</span>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <a class="button" href="kontak.html" id="calc-cta" style="width: 100%; text-align: center;">Konsultasi Paket Ini (350 Siswa) →</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-head" style="margin-top: 60px;">
+          <div>
+            <span class="eyebrow">Perbandingan Lengkap</span>
+            <h2>Struktur 4 Tier Berdasarkan Kapasitas Siswa</h2>
+          </div>
+          <p>Seluruh fitur tetap aktif 100% pada semua tier. Biaya tahunan disesuaikan dengan volume siswa terdaftar.</p>
+        </div>
+
+        <!-- BANNER JAMINAN FITUR LENGKAP -->
+        <div class="all-features-banner">
+          <div style="display: flex; align-items: center; gap: 16px;">
+            <div class="banner-icon">✓</div>
+            <div>
+              <strong style="display: block; font-size: 16px; color: var(--yellow); margin-bottom: 3px;">Fitur Tetap Terbuka Semua Tanpa Pembatasan</strong>
+              <span style="font-size: 14px; color: #dbe7ff;">Setiap sekolah mendapatkan sistem SIMS Edutive seutuhnya. Perbedaan paket murni hanya pada kapasitas jumlah siswa.</span>
+            </div>
+          </div>
+          <div style="font-size: 13px; font-weight: 700; color: white; background: rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); white-space: nowrap;">
+            Tanpa Biaya Add-on
+          </div>
+        </div>
+
+        <!-- 4 TIER COMPARISON CARDS -->
+        <div class="tiers-4-grid">
+          <!-- TIER 1 -->
+          <article class="tier-card" data-tier-card="1">
+            <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
+            <span class="tier-card-badge">&lt; 100 Siswa</span>
+            <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
+            <h3>Tier Pratama</h3>
+            <div class="tier-card-capacity">Kapasitas: Kurang dari 100 Siswa</div>
+            <div class="tier-card-price">Rp 6.000.000 <small>/ thn</small></div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">6 Juta Rupiah</div>
+            <p class="tier-card-desc">Paket lengkap untuk sekolah rintisan, PAUD/TK mandiri, atau PKBM dengan kapasitas siswa di bawah 100.</p>
+            <ul class="tier-card-features">
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
+              </li>
+            </ul>
+            <button type="button" class="button ghost tier-card-action" data-select-tier="80">Pilih Tier Ini</button>
+          </article>
+
+          <!-- TIER 2 -->
+          <article class="tier-card featured-popular" data-tier-card="2">
+            <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
+            <span class="tier-card-badge">Paling Populer · 100–700 Siswa</span>
+            <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
+            <h3>Tier Reguler</h3>
+            <div class="tier-card-capacity">Kapasitas: 100 – 700 Siswa</div>
+            <div class="tier-card-price">Rp 9.000.000 <small>/ thn</small></div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">9 Juta Rupiah</div>
+            <p class="tier-card-desc">Paket paling seimbang dan favorit untuk SD, SMP, atau SMA standar dengan efisiensi biaya tertinggi.</p>
+            <ul class="tier-card-features">
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
+              </li>
+            </ul>
+            <button type="button" class="button tier-card-action" data-select-tier="350">Pilih Tier Ini</button>
+          </article>
+
+          <!-- TIER 3 -->
+          <article class="tier-card" data-tier-card="3">
+            <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
+            <span class="tier-card-badge">701 – 1.000 Siswa</span>
+            <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
+            <h3>Tier Utama</h3>
+            <div class="tier-card-capacity">Kapasitas: 701 – 1.000 Siswa</div>
+            <div class="tier-card-price">Rp 15.000.000 <small>/ thn</small></div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">15 Juta Rupiah</div>
+            <p class="tier-card-desc">Optimal untuk sekolah menengah atas besar atau SMK dengan mobilitas tinggi dan ujian serentak massal.</p>
+            <ul class="tier-card-features">
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
+              </li>
+            </ul>
+            <button type="button" class="button ghost tier-card-action" data-select-tier="850">Pilih Tier Ini</button>
+          </article>
+
+          <!-- TIER 4 -->
+          <article class="tier-card" data-tier-card="4">
+            <span class="active-tier-indicator">✓ Sesuai Simulasi</span>
+            <span class="tier-card-badge">&gt; 1.000 Siswa</span>
+            <div class="tier-features-status">✓ Semua Fitur Terbuka</div>
+            <h3>Tier Kompleks</h3>
+            <div class="tier-card-capacity">Kapasitas: Di atas 1.000 Siswa</div>
+            <div class="tier-card-price">Rp 22.000.000 <small>/ thn</small></div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--violet); margin-bottom: 12px;">22 Juta Rupiah</div>
+            <p class="tier-card-desc">Kapasitas tanpa batas untuk SMK besar atau yayasan multi-jenjang lebih dari 1.000 siswa aktif.</p>
+            <ul class="tier-card-features">
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>100% Fitur Aktif:</strong> Semua modul SIMS terbuka penuh</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Absensi Wajah, QR Geolokasi &amp; Notifikasi Orang Tua</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>CBT Ujian Online, Bank Soal &amp; Rapor Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Asisten Guru AI, Arena Belajar &amp; Ruang Kelas</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Keuangan SPP, Sarpras &amp; Agenda Digital</span>
+              </li>
+              <li>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Akun Guru, Siswa &amp; Orang Tua tanpa batas</span>
+              </li>
+            </ul>
+            <button type="button" class="button ghost tier-card-action" data-select-tier="1200">Pilih Tier Ini</button>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION FAQ -->
+    <section class="section tint">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <span class="eyebrow">Pertanyaan umum</span>
+            <h2>Keputusan investasi yang transparan dan pasti.</h2>
+          </div>
+        </div>
+        <div class="faq">
+          <details>
+            <summary>Apakah ada perbedaan fitur antara paket kecil dan paket besar?</summary>
+            <p><strong>Tidak ada perbedaan fitur sama sekali.</strong> Seluruh fitur dan modul SIMS Edutive—mulai dari Absensi Wajah &amp; QR, CBT Ujian Online, Nilai &amp; Rapor Digital, Keuangan SPP, Sarpras, hingga Asisten Guru AI—terbuka 100% untuk semua sekolah. Perbedaan biaya murni hanya dihitung dari kapasitas jumlah siswa aktif Anda.</p>
+          </details>
+          <details>
+            <summary>Bagaimana penentuan biaya jika jumlah siswa bertambah di tengah tahun?</summary>
+            <p>Kami memberikan batas toleransi yang wajar untuk pertumbuhan siswa normal. Penyesuaian ke tier berikutnya baru akan dihitung pada saat perpanjangan periode tahun ajaran baru berikutnya.</p>
+          </details>
+          <details>
+            <summary>Apakah ada biaya tersembunyi seperti biaya bulanan per siswa?</summary>
+            <p>Tidak ada. Edutive menerapkan sistem lisensi tahunan flat. Seluruh siswa terdaftar, guru, admin, dan orang tua dapat menggunakan seluruh fitur tanpa biaya per transaksi atau biaya lisensi per orang.</p>
+          </details>
+          <details>
+            <summary>Apakah fitur Asisten Guru AI sudah termasuk?</summary>
+            <p>Ya, modul Asisten Guru AI dan Arena Belajar sudah terintegrasi pada sistem di semua paket. Konfigurasi model dan hak akses guru dapat disesuaikan dengan kebutuhan ajar sekolah saat proses setup.</p>
+          </details>
+          <details>
+            <summary>Apakah pelatihan guru dan tim operator sudah termasuk?</summary>
+            <p>Ya. Setiap implementasi paket tahunan disertai panduan alur peran, video pengenalan, dan sesi pelatihan daring untuk admin serta perwakilan guru sekolah.</p>
+          </details>
+          <details>
+            <summary>Bagaimana langkah untuk memulai?</summary>
+            <p>Klik tombol minta demo atau pilih tier sesuai simulasi Anda. Tim kami akan menyiapkan sesi demo interaktif dan memandu penyiapan data awal sekolah.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-row">
+      <span>© SIMS — Sistem Informasi Manajemen Sekolah (Edutive)</span>
+      <span><a href="index.html">Beranda</a> · <a href="fitur.html">Fitur</a> · <a href="harga.html">Paket</a> · <a href="kontak.html">Kontak</a></span>
+    </div>
+  </footer>
+  <script src="script.js"></script>
+</body>
+</html>

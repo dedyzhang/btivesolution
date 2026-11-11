@@ -1,11 +1,21 @@
 import { chromium } from 'playwright';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const baseDir = fs.existsSync('D:/SIMS_MW_APP/marketing')
+  ? 'D:/SIMS_MW_APP/marketing'
+  : fileURLToPath(new URL('.', import.meta.url));
+
+const fileUrl = (name) => pathToFileURL(path.join(baseDir, name)).href;
+const outPath = (name) => path.join(baseDir, name);
 
 const browser = await chromium.launch({
   headless: true,
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
-await page.goto('file:///D:/SIMS_MW_APP/marketing/index.html', { waitUntil: 'load' });
+await page.goto(fileUrl('index.html'), { waitUntil: 'load' });
 await page.evaluate(() => document.fonts.ready);
 
 const imageAudit = await page.locator('main img').evaluateAll((images) => images.map((image) => ({
@@ -24,13 +34,13 @@ if (await page.locator('[data-zoom-reset]').textContent() !== '120%') throw new 
 await page.keyboard.press('Escape');
 if (await page.locator('.image-lightbox').isVisible()) throw new Error('Lightbox tidak tertutup dengan Escape.');
 
-await page.screenshot({ path: 'D:/SIMS_MW_APP/marketing/landing-preview.png', fullPage: true });
+await page.screenshot({ path: outPath('landing-preview.png'), fullPage: true });
 await page.setViewportSize({ width: 390, height: 844 });
-await page.screenshot({ path: 'D:/SIMS_MW_APP/marketing/landing-preview-mobile.png', fullPage: true });
+await page.screenshot({ path: outPath('landing-preview-mobile.png'), fullPage: true });
 console.log(`${await page.title()} :: ${page.url()} :: ${imageAudit.length} gambar OK :: lightbox OK`);
 
 for (const fileName of ['fitur.html', 'harga.html', 'kontak.html']) {
-  await page.goto(`file:///D:/SIMS_MW_APP/marketing/${fileName}`, { waitUntil: 'load' });
+  await page.goto(fileUrl(fileName), { waitUntil: 'load' });
   const audit = await page.locator('main img').evaluateAll((images) => images.map((image) => ({
     loaded: image.complete && image.naturalWidth > 0,
     cursor: getComputedStyle(image).cursor,
